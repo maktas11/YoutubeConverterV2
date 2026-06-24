@@ -1,0 +1,9 @@
+<resources>
+    <!-- Window-level theme used before Compose draws. The real UI theming lives
+         in the Compose theme (ui/theme). Parented from a framework theme so we
+         don't need AppCompat / Material View libraries. -->
+    <style name="Theme.YoutubeConverter" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
