@@ -15,6 +15,8 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import com.maktas.ytconverter.MainActivity
 import com.maktas.ytconverter.R
+import com.maktas.ytconverter.data.AudioFormat
+import com.maktas.ytconverter.data.DownloadFormat
 import com.maktas.ytconverter.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +31,7 @@ import java.util.UUID
  * Runs a download in a foreground service so it survives the app being
  * backgrounded or the screen turning off. Shows an ongoing progress notification
  * with a Cancel action; progress is published to [DownloadController] for the UI.
+ * The format is passed per-download via the intent; embeds/quality come from settings.
  */
 class DownloadService : Service() {
 
@@ -36,6 +39,7 @@ class DownloadService : Service() {
     private var job: Job? = null
     private var lastPercent = -1
     private var kindLabel = "audio"
+    private var currentTitle: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -44,11 +48,13 @@ class DownloadService : Service() {
             ACTION_CANCEL -> DownloadController.requestCancel() // running job winds down & stops us
             ACTION_DOWNLOAD -> {
                 val url = intent.getStringExtra(EXTRA_URL)
-                val video = intent.getBooleanExtra(EXTRA_VIDEO, false)
                 if (url.isNullOrBlank() || job?.isActive == true) {
                     if (job?.isActive != true) stopSelf()
                 } else {
-                    startDownload(url, video)
+                    val format = runCatching {
+                        DownloadFormat.valueOf(intent.getStringExtra(EXTRA_FORMAT) ?: "")
+                    }.getOrDefault(DownloadFormat.M4A)
+                    startDownload(url, format, intent.getStringExtra(EXTRA_TITLE))
                 }
             }
             else -> stopSelf()
@@ -56,37 +62,40 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startDownload(url: String, video: Boolean) {
-        kindLabel = if (video) "video" else "audio"
+    private fun startDownload(url: String, format: DownloadFormat, title: String?) {
+        kindLabel = if (format == DownloadFormat.MP4) "video" else "audio"
+        currentTitle = title
         createChannel()
         goForeground(buildNotification(text = "Starting…", progress = 0, indeterminate = true))
         lastPercent = -1
         val processId = UUID.randomUUID().toString()
-        DownloadController.onStart(processId)
+        DownloadController.onStart(processId, title)
 
         job = scope.launch {
             val settings = SettingsRepository(applicationContext).settings.first()
-            val result = if (video) {
-                Downloader.downloadVideo(
+            val result = when (format) {
+                DownloadFormat.MP4 -> Downloader.downloadVideo(
                     applicationContext, url, processId,
                     settings.videoQuality, settings.embedThumbnail, settings.embedMetadata,
                     ::handleProgress,
                 )
-            } else {
-                Downloader.downloadAudio(
+                DownloadFormat.M4A -> Downloader.downloadAudio(
                     applicationContext, url, processId,
-                    settings.audioFormat, settings.embedThumbnail, settings.embedMetadata,
+                    AudioFormat.M4A, settings.embedThumbnail, settings.embedMetadata,
+                    ::handleProgress,
+                )
+                DownloadFormat.MP3 -> Downloader.downloadAudio(
+                    applicationContext, url, processId,
+                    AudioFormat.MP3, settings.embedThumbnail, settings.embedMetadata,
                     ::handleProgress,
                 )
             }
             DownloadController.onFinished(result)
-            // Removes the ongoing progress notification...
             ServiceCompat.stopForeground(this@DownloadService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            // ...then leave a persistent result notification behind (unless cancelled).
             if (!DownloadController.wasCancelled) {
                 result.fold(
                     onSuccess = { notifyDone("Download complete", it.displayName) },
-                    onFailure = { notifyDone("Download failed", it.message ?: "Unknown error") },
+                    onFailure = { notifyDone("Download failed", ErrorMapper.friendly(it.message)) },
                 )
             }
             stopSelf()
@@ -133,8 +142,8 @@ class DownloadService : Service() {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_notification)
-            .setAutoCancel(true) // dismiss on tap
-            .setOngoing(false)   // dismissible, persists until then
+            .setAutoCancel(true)
+            .setOngoing(false)
             .setContentIntent(openApp)
             .build()
         manager.notify(DONE_NOTIF_ID, notification)
@@ -148,7 +157,7 @@ class DownloadService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Downloading $kindLabel")
+            .setContentTitle(currentTitle ?: "Downloading $kindLabel")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
@@ -177,7 +186,8 @@ class DownloadService : Service() {
         const val ACTION_DOWNLOAD = "com.maktas.ytconverter.action.DOWNLOAD"
         const val ACTION_CANCEL = "com.maktas.ytconverter.action.CANCEL"
         const val EXTRA_URL = "com.maktas.ytconverter.extra.URL"
-        const val EXTRA_VIDEO = "com.maktas.ytconverter.extra.VIDEO"
+        const val EXTRA_FORMAT = "com.maktas.ytconverter.extra.FORMAT"
+        const val EXTRA_TITLE = "com.maktas.ytconverter.extra.TITLE"
         private const val CHANNEL_ID = "downloads"
         private const val NOTIF_ID = 1001
         private const val DONE_NOTIF_ID = 1002

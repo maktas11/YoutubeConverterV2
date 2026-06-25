@@ -17,13 +17,11 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // Phone target is arm64-v8a ONLY (the Galaxy S25 is arm64, and the
-        // bundled Python + yt-dlp + FFmpeg make every extra ABI hugely inflate
-        // the APK). x86_64 is included ONLY so the app also runs on a standard
-        // Windows/Intel emulator for testing.
-        // TODO: remove "x86_64" before building the final APK for the phone.
+        // arm64-v8a ONLY — phones are arm64, and the bundled Python + yt-dlp +
+        // FFmpeg make extra ABIs hugely inflate the APK. (Temporarily add
+        // "x86_64" back if you ever want to run it on a standard Intel emulator.)
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += "arm64-v8a"
         }
     }
 
@@ -73,6 +71,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.datastore.preferences)
+
+    // Coil 3 for loading search-result thumbnails over the network.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     // Jetpack Compose (Material 3) via BOM
     implementation(platform(libs.androidx.compose.bom))

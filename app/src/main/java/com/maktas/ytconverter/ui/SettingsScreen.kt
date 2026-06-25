@@ -27,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.maktas.ytconverter.data.AppTheme
-import com.maktas.ytconverter.data.AudioFormat
 import com.maktas.ytconverter.data.VideoQuality
 import com.maktas.ytconverter.download.UpdateChannel
 
@@ -46,16 +45,6 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = M
         TextButton(onClick = onBack) { Text("← Back") }
         Text("Settings", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(24.dp))
-
-        SectionTitle("Audio format")
-        RadioRow("M4A — lossless, instant", settings.audioFormat == AudioFormat.M4A) {
-            vm.setAudioFormat(AudioFormat.M4A)
-        }
-        RadioRow("MP3 — re-encoded, max compatibility", settings.audioFormat == AudioFormat.MP3) {
-            vm.setAudioFormat(AudioFormat.MP3)
-        }
-
-        SectionDivider()
 
         SectionTitle("Video (MP4) quality")
         RadioRow("Best quality", settings.videoQuality == VideoQuality.BEST) {

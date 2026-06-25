@@ -7,15 +7,14 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Observable state for the current (single) download. */
 sealed interface DownloadUiState {
     data object Idle : DownloadUiState
-    data class Running(val percent: Float, val etaSeconds: Long) : DownloadUiState
+    data class Running(val percent: Float, val etaSeconds: Long, val title: String?) : DownloadUiState
     data class Success(val displayName: String) : DownloadUiState
     data class Error(val message: String) : DownloadUiState
 }
 
 /**
  * Single source of truth for the active download, shared between the foreground
- * [DownloadService] (the writer) and the UI (the reader). A plain process-wide
- * singleton is enough because v1 runs at most one download at a time.
+ * [DownloadService] (writer) and the UI (reader). v1 runs one download at a time.
  */
 object DownloadController {
 
@@ -24,27 +23,29 @@ object DownloadController {
 
     @Volatile private var processId: String? = null
     @Volatile private var cancelled = false
+    @Volatile private var title: String? = null
 
     val isRunning: Boolean get() = _state.value is DownloadUiState.Running
 
     /** Whether the most recent run was cancelled (read right after it finishes). */
     val wasCancelled: Boolean get() = cancelled
 
-    fun onStart(id: String) {
+    fun onStart(id: String, title: String?) {
         processId = id
         cancelled = false
-        _state.value = DownloadUiState.Running(percent = 0f, etaSeconds = -1)
+        this.title = title
+        _state.value = DownloadUiState.Running(percent = 0f, etaSeconds = -1, title = title)
     }
 
     fun onProgress(percent: Float, etaSeconds: Long) {
-        if (!cancelled) _state.value = DownloadUiState.Running(percent, etaSeconds)
+        if (!cancelled) _state.value = DownloadUiState.Running(percent, etaSeconds, title)
     }
 
     fun onFinished(result: Result<Downloader.Saved>) {
         _state.value = when {
             cancelled -> DownloadUiState.Idle
             result.isSuccess -> DownloadUiState.Success(result.getOrThrow().displayName)
-            else -> DownloadUiState.Error(result.exceptionOrNull()?.message ?: "Download failed")
+            else -> DownloadUiState.Error(ErrorMapper.friendly(result.exceptionOrNull()?.message))
         }
         processId = null
     }
@@ -53,5 +54,10 @@ object DownloadController {
     fun requestCancel() {
         cancelled = true
         processId?.let { Downloader.cancel(it) }
+    }
+
+    /** Dismiss a finished (success/error) status. No-op while a download is running. */
+    fun clear() {
+        if (_state.value !is DownloadUiState.Running) _state.value = DownloadUiState.Idle
     }
 }
