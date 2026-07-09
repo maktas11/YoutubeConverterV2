@@ -6,12 +6,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.maktas.ytconverter.data.SettingsRepository
+import com.maktas.ytconverter.data.ShuffleStyle
 import com.maktas.ytconverter.download.EngineUpdater
+import com.maktas.ytconverter.music.PlaybackPrefs
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -40,6 +43,12 @@ class App : Application() {
                 InitState.Failed(e.message ?: e.javaClass.simpleName)
             }
             if (initState is InitState.Ready) maybeAutoUpdate()
+        }
+        // Keep the playback service's shuffle-style in sync with settings.
+        scope.launch {
+            SettingsRepository(this@App).settings.collect {
+                PlaybackPrefs.pureRandomShuffle = it.shuffleStyle == ShuffleStyle.PURE_RANDOM
+            }
         }
     }
 

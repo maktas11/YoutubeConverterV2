@@ -12,6 +12,7 @@ import com.maktas.ytconverter.data.AppTheme
 import com.maktas.ytconverter.data.DownloadFormat
 import com.maktas.ytconverter.data.Settings
 import com.maktas.ytconverter.data.SettingsRepository
+import com.maktas.ytconverter.data.ShuffleStyle
 import com.maktas.ytconverter.data.VideoQuality
 import com.maktas.ytconverter.download.DownloadController
 import com.maktas.ytconverter.download.DownloadService
@@ -79,8 +80,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var urlError: String? by mutableStateOf(null)
         private set
 
+    /** True when a shared URL arrived — tells the UI to switch to the Converter tab. */
+    var navigateToConverter: Boolean by mutableStateOf(false)
+        private set
+
     fun onUrlChange(value: String) {
         url = value
+    }
+
+    fun onSharedUrl(value: String) {
+        url = value
+        navigateToConverter = true
+    }
+
+    fun onNavigatedToConverter() {
+        navigateToConverter = false
     }
 
     fun onQueryChange(value: String) {
@@ -168,6 +182,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setTheme(value: AppTheme) = launchSetting { settingsRepo.setTheme(value) }
     fun setUpdateChannel(value: UpdateChannel) = launchSetting { settingsRepo.setUpdateChannel(value) }
     fun setVideoQuality(value: VideoQuality) = launchSetting { settingsRepo.setVideoQuality(value) }
+    fun setShuffleStyle(value: ShuffleStyle) = launchSetting { settingsRepo.setShuffleStyle(value) }
 
     private inline fun launchSetting(crossinline block: suspend () -> Unit) {
         viewModelScope.launch { block() }

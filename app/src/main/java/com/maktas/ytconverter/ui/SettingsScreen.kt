@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.maktas.ytconverter.data.AppTheme
+import com.maktas.ytconverter.data.ShuffleStyle
 import com.maktas.ytconverter.data.VideoQuality
 import com.maktas.ytconverter.download.UpdateChannel
 
@@ -69,6 +70,16 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = M
         RadioRow("Follow system", settings.theme == AppTheme.SYSTEM) { vm.setTheme(AppTheme.SYSTEM) }
         RadioRow("Light", settings.theme == AppTheme.LIGHT) { vm.setTheme(AppTheme.LIGHT) }
         RadioRow("Dark", settings.theme == AppTheme.DARK) { vm.setTheme(AppTheme.DARK) }
+
+        SectionDivider()
+
+        SectionTitle("Shuffle style")
+        RadioRow("Smart — plays each song once before repeating", settings.shuffleStyle == ShuffleStyle.SMART) {
+            vm.setShuffleStyle(ShuffleStyle.SMART)
+        }
+        RadioRow("Pure random — fully random, can repeat a song", settings.shuffleStyle == ShuffleStyle.PURE_RANDOM) {
+            vm.setShuffleStyle(ShuffleStyle.PURE_RANDOM)
+        }
 
         SectionDivider()
 
