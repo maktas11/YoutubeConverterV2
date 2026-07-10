@@ -147,9 +147,15 @@ class MainActivity : ComponentActivity() {
             val darkTheme = when (settings.theme) {
                 AppTheme.LIGHT -> false
                 AppTheme.DARK -> true
-                AppTheme.SYSTEM -> isSystemInDarkTheme()
+                AppTheme.SYSTEM, AppTheme.DISABLED -> isSystemInDarkTheme()
             }
-            YoutubeConverterTheme(darkTheme = darkTheme) {
+            YoutubeConverterTheme(
+                darkTheme = darkTheme,
+                rawColors = settings.theme == AppTheme.DISABLED,
+                colorThemeMode = settings.colorThemeMode,
+                colorPresetId = settings.colorPresetId,
+                customColors = settings.customColors,
+            ) {
                 RequestNotificationPermission()
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 var showNowPlaying by rememberSaveable { mutableStateOf(false) }
@@ -333,20 +339,28 @@ private fun MainScaffold(
             }
         }
     ) { innerPadding ->
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-            if (page == 0) {
-                MusicScreen(
-                    modifier = Modifier.padding(innerPadding),
-                    onSearchCoverForSong = onSearchCoverForSong,
-                )
-            } else {
-                ConverterScreen(
-                    initState = app.initState,
-                    vm = vm,
-                    onOpenSettings = onOpenSettings,
-                    modifier = Modifier.padding(innerPadding),
-                )
+        Box(modifier = Modifier.fillMaxSize()) {
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                if (page == 0) {
+                    MusicScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        onSearchCoverForSong = onSearchCoverForSong,
+                    )
+                } else {
+                    ConverterScreen(
+                        initState = app.initState,
+                        vm = vm,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+                }
             }
+            // Shared across every tab, not just the Converter screen.
+            TextButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(innerPadding),
+            ) { Text("Settings") }
         }
     }
 }
@@ -696,7 +710,6 @@ private fun QueueSheet(playback: PlaybackViewModel, onDismiss: () -> Unit) {
 private fun ConverterScreen(
     initState: App.InitState,
     vm: MainViewModel,
-    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -706,9 +719,7 @@ private fun ConverterScreen(
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = onOpenSettings) { Text("Settings") }
-        }
+        Spacer(Modifier.height(8.dp))
         Text("YT Converter", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(4.dp))
         Text(

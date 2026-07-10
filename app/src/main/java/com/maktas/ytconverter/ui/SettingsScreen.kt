@@ -23,6 +23,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -33,6 +36,12 @@ import com.maktas.ytconverter.download.UpdateChannel
 
 @Composable
 fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    var showAppearance by remember { mutableStateOf(false) }
+    if (showAppearance) {
+        AppearanceSettingsScreen(vm, onBack = { showAppearance = false }, modifier = modifier)
+        return
+    }
+
     val settings by vm.settings.collectAsState()
     val update = vm.updateState
 
@@ -70,6 +79,18 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = M
         RadioRow("Follow system", settings.theme == AppTheme.SYSTEM) { vm.setTheme(AppTheme.SYSTEM) }
         RadioRow("Light", settings.theme == AppTheme.LIGHT) { vm.setTheme(AppTheme.LIGHT) }
         RadioRow("Dark", settings.theme == AppTheme.DARK) { vm.setTheme(AppTheme.DARK) }
+        RadioRow("Disabled", settings.theme == AppTheme.DISABLED) { vm.setTheme(AppTheme.DISABLED) }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showAppearance = true }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Colors (presets & custom)", modifier = Modifier.weight(1f))
+            Text("→", color = MaterialTheme.colorScheme.primary)
+        }
 
         SectionDivider()
 

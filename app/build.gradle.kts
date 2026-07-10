@@ -89,6 +89,11 @@ dependencies {
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
 
+    // MaterialKolor: generates a full accessible Material3 palette from a seed
+    // color (same color science as Android's own Material You), for the
+    // preset/custom color theme picker.
+    implementation(libs.material.kolor)
+
     // Jetpack Compose (Material 3) via BOM
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

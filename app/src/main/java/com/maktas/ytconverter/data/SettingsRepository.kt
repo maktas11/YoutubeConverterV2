@@ -17,8 +17,9 @@ import kotlinx.coroutines.flow.map
 /** Audio container/codec the downloader uses. M4A = stream copy (lossless/instant). */
 enum class AudioFormat { M4A, MP3 }
 
-/** App theme preference. */
-enum class AppTheme { SYSTEM, LIGHT, DARK }
+/** App theme preference. DISABLED turns off light/dark background tinting entirely —
+ *  Preset/Custom colors render exactly as picked, with no blend toward white/black. */
+enum class AppTheme { SYSTEM, LIGHT, DARK, DISABLED }
 
 /** Max video quality when downloading MP4. */
 enum class VideoQuality { BEST, P1080, P720 }
@@ -28,6 +29,35 @@ enum class DownloadFormat { M4A, MP3, MP4 }
 
 /** How shuffle behaves. SMART = each song once before repeating; PURE_RANDOM = fully random. */
 enum class ShuffleStyle { SMART, PURE_RANDOM }
+
+/**
+ * Where the app's color scheme comes from. DYNAMIC = match the phone wallpaper
+ * (Material You, Android 12+); PRESET = one of the curated [ColorPresets]; CUSTOM =
+ * user-picked colors per role, with unset roles auto-derived from [customSeed].
+ */
+enum class ColorThemeMode { DYNAMIC, PRESET, CUSTOM }
+
+/** The individually-overridable roles in custom color-theme mode. */
+enum class CustomColorRole { PRIMARY, SECONDARY, TERTIARY, NEUTRAL, NEUTRAL_VARIANT, ERROR }
+
+/**
+ * A per-role custom color override. Each color is nullable — null means "auto-derive
+ * from the seed," which is exactly what a role's "reset to auto" button clears it to.
+ */
+data class CustomColors(
+    val seed: Int = DEFAULT_CUSTOM_SEED,
+    val primary: Int? = null,
+    val secondary: Int? = null,
+    val tertiary: Int? = null,
+    val neutral: Int? = null,
+    val neutralVariant: Int? = null,
+    val error: Int? = null,
+) {
+    companion object {
+        // Falls back to the app's original brand red if the user never touches the seed.
+        const val DEFAULT_CUSTOM_SEED = 0xFFC2271B.toInt()
+    }
+}
 
 /** All persisted user settings. The URL and Search sections each keep their own format. */
 data class Settings(
@@ -39,6 +69,9 @@ data class Settings(
     val updateChannel: UpdateChannel = UpdateChannel.STABLE,
     val videoQuality: VideoQuality = VideoQuality.BEST,
     val shuffleStyle: ShuffleStyle = ShuffleStyle.SMART,
+    val colorThemeMode: ColorThemeMode = ColorThemeMode.DYNAMIC,
+    val colorPresetId: String = ColorPresets.default.id,
+    val customColors: CustomColors = CustomColors(),
 )
 
 // One DataStore per process, keyed on the (application) Context.
@@ -58,6 +91,15 @@ class SettingsRepository(private val context: Context) {
         val SHUFFLE_STYLE = stringPreferencesKey("shuffle_style")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         val HIDDEN_SONGS = stringSetPreferencesKey("hidden_songs")
+        val COLOR_THEME_MODE = stringPreferencesKey("color_theme_mode")
+        val COLOR_PRESET_ID = stringPreferencesKey("color_preset_id")
+        val CUSTOM_SEED = intPreferencesKey("custom_seed")
+        val CUSTOM_PRIMARY = intPreferencesKey("custom_primary")
+        val CUSTOM_SECONDARY = intPreferencesKey("custom_secondary")
+        val CUSTOM_TERTIARY = intPreferencesKey("custom_tertiary")
+        val CUSTOM_NEUTRAL = intPreferencesKey("custom_neutral")
+        val CUSTOM_NEUTRAL_VARIANT = intPreferencesKey("custom_neutral_variant")
+        val CUSTOM_ERROR = intPreferencesKey("custom_error")
         // Playback state restore
         val PB_QUEUE_JSON = stringPreferencesKey("pb_queue_json")
         val PB_QUEUE_INDEX = intPreferencesKey("pb_queue_index")
@@ -78,6 +120,17 @@ class SettingsRepository(private val context: Context) {
         updateChannel = enumOr(this[Keys.UPDATE_CHANNEL], UpdateChannel.STABLE),
         videoQuality = enumOr(this[Keys.VIDEO_QUALITY], VideoQuality.BEST),
         shuffleStyle = enumOr(this[Keys.SHUFFLE_STYLE], ShuffleStyle.SMART),
+        colorThemeMode = enumOr(this[Keys.COLOR_THEME_MODE], ColorThemeMode.DYNAMIC),
+        colorPresetId = this[Keys.COLOR_PRESET_ID] ?: ColorPresets.default.id,
+        customColors = CustomColors(
+            seed = this[Keys.CUSTOM_SEED] ?: CustomColors.DEFAULT_CUSTOM_SEED,
+            primary = this[Keys.CUSTOM_PRIMARY],
+            secondary = this[Keys.CUSTOM_SECONDARY],
+            tertiary = this[Keys.CUSTOM_TERTIARY],
+            neutral = this[Keys.CUSTOM_NEUTRAL],
+            neutralVariant = this[Keys.CUSTOM_NEUTRAL_VARIANT],
+            error = this[Keys.CUSTOM_ERROR],
+        ),
     )
 
     suspend fun setUrlFormat(value: DownloadFormat) = put(Keys.URL_FORMAT, value.name)
@@ -90,6 +143,25 @@ class SettingsRepository(private val context: Context) {
     suspend fun setUpdateChannel(value: UpdateChannel) = put(Keys.UPDATE_CHANNEL, value.name)
     suspend fun setVideoQuality(value: VideoQuality) = put(Keys.VIDEO_QUALITY, value.name)
     suspend fun setShuffleStyle(value: ShuffleStyle) = put(Keys.SHUFFLE_STYLE, value.name)
+
+    suspend fun setColorThemeMode(value: ColorThemeMode) = put(Keys.COLOR_THEME_MODE, value.name)
+    suspend fun setColorPresetId(value: String) = put(Keys.COLOR_PRESET_ID, value)
+    suspend fun setCustomSeed(value: Int) = context.dataStore.edit { it[Keys.CUSTOM_SEED] = value }
+
+    /** Sets a custom-mode role override, or clears it back to "auto" when [value] is null. */
+    suspend fun setCustomRoleColor(role: CustomColorRole, value: Int?) {
+        val key = when (role) {
+            CustomColorRole.PRIMARY -> Keys.CUSTOM_PRIMARY
+            CustomColorRole.SECONDARY -> Keys.CUSTOM_SECONDARY
+            CustomColorRole.TERTIARY -> Keys.CUSTOM_TERTIARY
+            CustomColorRole.NEUTRAL -> Keys.CUSTOM_NEUTRAL
+            CustomColorRole.NEUTRAL_VARIANT -> Keys.CUSTOM_NEUTRAL_VARIANT
+            CustomColorRole.ERROR -> Keys.CUSTOM_ERROR
+        }
+        context.dataStore.edit { prefs ->
+            if (value != null) prefs[key] = value else prefs.remove(key)
+        }
+    }
 
     suspend fun lastUpdateCheck(): Long = context.dataStore.data.first()[Keys.LAST_UPDATE_CHECK] ?: 0L
     suspend fun setLastUpdateCheck(value: Long) =

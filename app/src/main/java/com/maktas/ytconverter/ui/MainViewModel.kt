@@ -9,6 +9,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maktas.ytconverter.data.AppTheme
+import com.maktas.ytconverter.data.ColorThemeMode
+import com.maktas.ytconverter.data.CustomColorRole
 import com.maktas.ytconverter.data.DownloadFormat
 import com.maktas.ytconverter.data.Settings
 import com.maktas.ytconverter.data.SettingsRepository
@@ -183,6 +185,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setUpdateChannel(value: UpdateChannel) = launchSetting { settingsRepo.setUpdateChannel(value) }
     fun setVideoQuality(value: VideoQuality) = launchSetting { settingsRepo.setVideoQuality(value) }
     fun setShuffleStyle(value: ShuffleStyle) = launchSetting { settingsRepo.setShuffleStyle(value) }
+
+    fun setColorThemeMode(value: ColorThemeMode) = launchSetting { settingsRepo.setColorThemeMode(value) }
+    fun setColorPresetId(value: String) = launchSetting { settingsRepo.setColorPresetId(value) }
+    fun setCustomSeed(value: Int) = launchSetting { settingsRepo.setCustomSeed(value) }
+    fun setCustomRoleColor(role: CustomColorRole, value: Int?) =
+        launchSetting { settingsRepo.setCustomRoleColor(role, value) }
 
     private inline fun launchSetting(crossinline block: suspend () -> Unit) {
         viewModelScope.launch { block() }
