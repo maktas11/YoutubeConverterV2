@@ -4,38 +4,27 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
@@ -52,9 +40,11 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-
 private const val CHROME_UA =
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+// Cover art below this size (either dimension) is rejected outright — never offered as usable.
+private const val MIN_COVER_DIMENSION_PX = 640
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -67,30 +57,21 @@ fun CoverSearchScreen(
     val isCapturing = remember { mutableStateOf(false) }
     val errorMessage = remember { mutableStateOf<String?>(null) }
     val pendingBitmap = remember { mutableStateOf<Bitmap?>(null) }
-    // URL detected passively by shouldInterceptRequest — shown in the "Use this?" bar.
-    val capturedUrl = remember { mutableStateOf<String?>(null) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
-    // shouldInterceptRequest runs on a background thread; use a channel to post to main.
-    val interceptChannel = remember { Channel<String>(Channel.CONFLATED) }
-    // Download pipeline — receives confirmed URLs from the "Use this" button.
-    val downloadChannel = remember { Channel<String>(Channel.CONFLATED) }
+    // Populated by the JS bridge the instant the user taps a result thumbnail — Bing
+    // embeds each thumbnail's true full-resolution source URL as page data, so there's
+    // no need to guess from network traffic the way Google Images requires.
+    val selectedUrlChannel = remember { Channel<String>(Channel.CONFLATED) }
 
     pendingBitmap.value?.let { bmp ->
         pendingBitmap.value = null
         onImageCaptured(bmp)
     }
 
-    // Bridge intercepted URLs from the background thread onto Compose state.
+    // Download the tapped image, enforce a minimum resolution, then hand it to the crop screen.
     LaunchedEffect(Unit) {
-        for (url in interceptChannel) {
-            capturedUrl.value = url
-        }
-    }
-
-    // Download the confirmed image and pass the bitmap to the crop screen.
-    LaunchedEffect(Unit) {
-        for (url in downloadChannel) {
+        for (url in selectedUrlChannel) {
             isCapturing.value = true
             errorMessage.value = null
             val bmp = withContext(Dispatchers.IO) {
@@ -99,7 +80,7 @@ fun CoverSearchScreen(
                     conn.connectTimeout = 12_000
                     conn.readTimeout = 15_000
                     conn.setRequestProperty("User-Agent", CHROME_UA)
-                    conn.setRequestProperty("Referer", "https://www.google.com/")
+                    conn.setRequestProperty("Referer", "https://www.bing.com/")
                     conn.connect()
                     if (conn.responseCode == HttpURLConnection.HTTP_OK)
                         BitmapFactory.decodeStream(conn.inputStream)
@@ -107,13 +88,17 @@ fun CoverSearchScreen(
                 }.getOrNull()
             }
             isCapturing.value = false
-            if (bmp != null) pendingBitmap.value = bmp
-            else errorMessage.value = "Couldn't load that image — try another."
+            when {
+                bmp == null -> errorMessage.value = "Couldn't load that image — try another."
+                bmp.width < MIN_COVER_DIMENSION_PX || bmp.height < MIN_COVER_DIMENSION_PX ->
+                    errorMessage.value =
+                        "Too low quality (${bmp.width}×${bmp.height}) — try another."
+                else -> pendingBitmap.value = bmp
+            }
         }
     }
 
     fun navigateBack() {
-        capturedUrl.value = null
         val wv = webViewRef.value
         if (wv != null && wv.canGoBack()) wv.goBack() else onDismiss()
     }
@@ -148,30 +133,28 @@ fun CoverSearchScreen(
                     settings.userAgentString = CHROME_UA
                     webViewRef.value = this
 
+                    addJavascriptInterface(
+                        object {
+                            @JavascriptInterface
+                            fun onImageSelected(url: String) {
+                                selectedUrlChannel.trySend(url)
+                            }
+                        },
+                        "AndroidCoverBridge"
+                    )
+
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                             isPageLoading.value = true
-                            capturedUrl.value = null
                             errorMessage.value = null
                         }
                         override fun onPageFinished(view: WebView, url: String) {
                             isPageLoading.value = false
-                        }
-
-                        // Runs on a background thread for every resource the WebView fetches.
-                        // Filter for real content images — not Google's encrypted-tbn
-                        // thumbnails or gstatic UI assets — and surface them via the channel.
-                        override fun shouldInterceptRequest(
-                            view: WebView,
-                            request: WebResourceRequest,
-                        ): WebResourceResponse? {
-                            val url = request.url.toString()
-                            if (isContentImage(url)) interceptChannel.trySend(url)
-                            return null
+                            view.evaluateJavascript(TAP_BRIDGE_JS, null)
                         }
                     }
 
-                    loadUrl("https://www.google.com/search?q=${Uri.encode(query)}&tbm=isch")
+                    loadUrl("https://www.bing.com/images/search?q=${Uri.encode(query)}")
                 }
                 frame.addView(
                     webView,
@@ -199,7 +182,7 @@ fun CoverSearchScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Text(
-                "Browse and tap a thumbnail",
+                "Tap a photo to use it as cover art",
                 color = Color.White,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
@@ -217,67 +200,7 @@ fun CoverSearchScreen(
             )
         }
 
-        // "Use this image?" bottom sheet — covers ~1/3 of the screen.
-        // Appears when shouldInterceptRequest detects a content-image URL.
-        capturedUrl.value?.let { url ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.35f)
-                    .align(Alignment.BottomCenter),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
-                shadowElevation = 8.dp,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 24.dp, vertical = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    // Drag-handle indicator
-                    Box(
-                        modifier = Modifier
-                            .width(40.dp)
-                            .height(4.dp)
-                            .background(
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                                RoundedCornerShape(2.dp),
-                            ),
-                    )
-                    Spacer(Modifier.height(20.dp))
-                    Text(
-                        "Image found!",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "We detected a full-size image. Do you want to use it as cover art?",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Button(
-                        onClick = { capturedUrl.value = null; downloadChannel.trySend(url) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Use this image", style = MaterialTheme.typography.labelLarge)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(
-                        onClick = { capturedUrl.value = null },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Keep browsing")
-                    }
-                }
-            }
-        }
-
-        // Error toast at the very bottom when a download fails
+        // Error toast at the very bottom when a download fails or the image is rejected for quality
         errorMessage.value?.let { err ->
             Box(
                 modifier = Modifier
@@ -293,19 +216,24 @@ fun CoverSearchScreen(
     }
 }
 
-// Returns true for real content images we want to offer the user.
-// Filters out Google's encrypted-tbn thumbnails, gstatic UI assets, favicons, and SVGs.
-// googleusercontent.com (lh3.*) is allowed — that's Google's CDN for the detail-panel image.
-private fun isContentImage(url: String): Boolean {
-    val lower = url.lowercase()
-    if (!url.startsWith("http")) return false
-    if (lower.contains("encrypted-tbn")) return false
-    if (lower.contains(".gstatic.com")) return false
-    if (lower.contains("google.com/")) return false
-    if (lower.contains("favicon")) return false
-    if (lower.contains(".svg")) return false
-    if (lower.contains(".gif")) return false
-    return lower.contains(".jpg") || lower.contains(".jpeg") ||
-        lower.contains(".png") || lower.contains(".webp") ||
-        lower.contains("googleusercontent.com")
-}
+// Injected into the Bing Images results page. Bing stores each thumbnail's true
+// full-resolution source URL as JSON in the result element's "m" attribute (murl),
+// so we read that directly instead of guessing from network requests. Runs in the
+// capture phase and prevents the default click so the WebView doesn't navigate away
+// from the results grid.
+private const val TAP_BRIDGE_JS = """
+(function() {
+  document.addEventListener('click', function(e) {
+    var el = e.target.closest('.iusc');
+    if (!el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      var data = JSON.parse(el.getAttribute('m'));
+      if (data && data.murl) {
+        AndroidCoverBridge.onImageSelected(data.murl);
+      }
+    } catch (err) {}
+  }, true);
+})();
+"""
