@@ -118,7 +118,7 @@ private fun SongPickerRow(song: Song, isSelected: Boolean, onToggle: () -> Unit)
     ) {
         Checkbox(checked = isSelected, onCheckedChange = { onToggle() })
         Spacer(Modifier.width(4.dp))
-        AudioArtwork(song.uri, Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)))
+        AudioArtwork(song.uri, song.title, Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)))
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

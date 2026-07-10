@@ -2,6 +2,7 @@ package com.maktas.ytconverter.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.util.Size
@@ -10,7 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MicExternalOff
 import androidx.compose.material.icons.filled.MoreVert
@@ -72,13 +74,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.maktas.ytconverter.data.CoverArtRepository
 import com.maktas.ytconverter.data.playlist.PlaylistWithCount
 import com.maktas.ytconverter.music.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-fun MusicScreen(modifier: Modifier = Modifier) {
+fun MusicScreen(
+    modifier: Modifier = Modifier,
+    onSearchCoverForSong: (Song) -> Unit = {},
+) {
     val vm: MusicViewModel = viewModel()
     val playback: PlaybackViewModel = viewModel()
     val playlistVm: PlaylistViewModel = viewModel()
@@ -132,7 +138,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
         Spacer(Modifier.height(12.dp))
 
         if (tab == 0) {
-            SongsTab(vm, playback, playlistVm, onGrant = { launcher.launch(permission) })
+            SongsTab(vm, playback, playlistVm, onSearchCoverForSong, onGrant = { launcher.launch(permission) })
         } else {
             PlaylistsPane(playlistVm)
         }
@@ -153,12 +159,13 @@ private fun SongsTab(
     vm: MusicViewModel,
     playback: PlaybackViewModel,
     playlistVm: PlaylistViewModel,
+    onSearchCoverForSong: (Song) -> Unit,
     onGrant: () -> Unit
 ) {
     when (val s = vm.state) {
         LibraryUiState.NeedsPermission -> PermissionPrompt(onGrant)
         LibraryUiState.Loading -> LoadingState()
-        is LibraryUiState.Loaded -> LoadedLibrary(vm, s.songs, playback, playlistVm)
+        is LibraryUiState.Loaded -> LoadedLibrary(vm, s.songs, playback, playlistVm, onSearchCoverForSong)
     }
 }
 
@@ -189,7 +196,8 @@ private fun LoadedLibrary(
     vm: MusicViewModel,
     songs: List<Song>,
     playback: PlaybackViewModel,
-    playlistVm: PlaylistViewModel
+    playlistVm: PlaylistViewModel,
+    onSearchCoverForSong: (Song) -> Unit,
 ) {
     OutlinedTextField(
         value = vm.query,
@@ -235,8 +243,7 @@ private fun LoadedLibrary(
                 SongRow(
                     song = song,
                     onClick = { playback.play(songs, index) },
-                    onAddToPlaylist = { addingToPlaylist = song },
-                    onMoreOptions = { actionSong = song }
+                    onMoreOptions = { actionSong = song },
                 )
             }
         }
@@ -256,6 +263,7 @@ private fun LoadedLibrary(
             SongActionDialog(
                 song = song,
                 onAddToPlaylist = { addingToPlaylist = song; actionSong = null },
+                onChangeCover = { onSearchCoverForSong(song); actionSong = null },
                 onDelete = { vm.deleteSong(song); actionSong = null },
                 onHide = { vm.hideSong(song); actionSong = null },
                 onDismiss = { actionSong = null }
@@ -268,17 +276,19 @@ private fun LoadedLibrary(
 private fun SongRow(
     song: Song,
     onClick: () -> Unit,
-    onAddToPlaylist: (() -> Unit)? = null,
     onMoreOptions: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onMoreOptions,
+            )
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AudioArtwork(song.uri, Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)))
+        AudioArtwork(song.uri, song.title, Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)))
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -316,6 +326,7 @@ private fun SongRow(
 private fun SongActionDialog(
     song: Song,
     onAddToPlaylist: () -> Unit,
+    onChangeCover: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit,
     onDismiss: () -> Unit,
@@ -348,6 +359,12 @@ private fun SongActionDialog(
         },
         text = {
             Column {
+                DropdownMenuItem(
+                    text = { Text("Change cover art") },
+                    leadingIcon = { Icon(Icons.Filled.Image, contentDescription = null) },
+                    onClick = onChangeCover
+                )
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Add to playlist") },
                     leadingIcon = { Icon(Icons.Filled.AddCircleOutline, contentDescription = null) },
@@ -396,7 +413,7 @@ internal fun AddToPlaylistDialog(
                             pl.playlist.name,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onPick(pl.playlist.id) }
+                                .combinedClickable(onClick = { onPick(pl.playlist.id) })
                                 .padding(vertical = 12.dp),
                             style = MaterialTheme.typography.bodyLarge
                         )
@@ -467,7 +484,7 @@ private fun PlaylistRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -550,16 +567,31 @@ private fun EmptyState(
     }
 }
 
-/** Loads embedded cover art (e.g. the YouTube thumbnail we embed) via the system thumbnailer. */
+/**
+ * Shows custom cover art (if set via CoverArtRepository) or falls back to the
+ * embedded MediaStore thumbnail, then to a generic music note icon.
+ */
 @Composable
-fun AudioArtwork(uri: String?, modifier: Modifier = Modifier) {
+fun AudioArtwork(uri: String?, title: String? = null, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val art by produceState<ImageBitmap?>(initialValue = null, uri) {
-        value = if (uri == null) null else withContext(Dispatchers.IO) {
+    val version by CoverArtRepository.version.collectAsState()
+
+    val art by produceState<ImageBitmap?>(initialValue = null, uri, title, version) {
+        value = withContext(Dispatchers.IO) {
+            // 1. Custom cover keyed by title
+            if (title != null) {
+                CoverArtRepository.getFile(context, title)?.let { f ->
+                    BitmapFactory.decodeFile(f.absolutePath)?.asImageBitmap()
+                        ?.let { return@withContext it }
+                }
+            }
+            // 2. Embedded thumbnail from MediaStore
             runCatching {
-                context.contentResolver
-                    .loadThumbnail(Uri.parse(uri), Size(256, 256), null)
-                    .asImageBitmap()
+                uri?.let {
+                    context.contentResolver
+                        .loadThumbnail(Uri.parse(it), Size(256, 256), null)
+                        .asImageBitmap()
+                }
             }.getOrNull()
         }
     }

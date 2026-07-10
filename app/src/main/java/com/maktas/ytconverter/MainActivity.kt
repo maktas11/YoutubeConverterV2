@@ -12,6 +12,7 @@ import androidx.activity.viewModels
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -51,7 +52,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -91,6 +92,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -104,13 +106,18 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import android.graphics.Bitmap
 import coil3.compose.AsyncImage
 import com.maktas.ytconverter.data.AppTheme
+import com.maktas.ytconverter.data.CoverArtRepository
 import com.maktas.ytconverter.data.DownloadFormat
 import com.maktas.ytconverter.download.DownloadUiState
 import com.maktas.ytconverter.download.SearchResult
+import com.maktas.ytconverter.music.Song
 import com.maktas.ytconverter.ui.AddToPlaylistDialog
 import com.maktas.ytconverter.ui.AudioArtwork
+import com.maktas.ytconverter.ui.CoverSearchScreen
+import com.maktas.ytconverter.ui.ImageCropScreen
 import com.maktas.ytconverter.ui.MainViewModel
 import com.maktas.ytconverter.ui.MusicScreen
 import com.maktas.ytconverter.ui.PendingDownload
@@ -120,8 +127,10 @@ import com.maktas.ytconverter.ui.RepeatMode
 import com.maktas.ytconverter.ui.SearchUiState
 import com.maktas.ytconverter.ui.SettingsScreen
 import com.maktas.ytconverter.ui.theme.YoutubeConverterTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -146,6 +155,21 @@ class MainActivity : ComponentActivity() {
                 var showNowPlaying by rememberSaveable { mutableStateOf(false) }
                 var showQueue by rememberSaveable { mutableStateOf(false) }
                 val playback: PlaybackViewModel = viewModel()
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+
+                // Cover-art search state shared between download flow and library.
+                var coverSearchQuery by remember { mutableStateOf<String?>(null) }
+                var imageToCrop by remember { mutableStateOf<Bitmap?>(null) }
+                var onCoverReady by remember { mutableStateOf<((Bitmap) -> Unit)?>(null) }
+                // Preview of the cover art the user picked for the current pending download.
+                var downloadCoverArt by remember { mutableStateOf<Bitmap?>(null) }
+
+                fun launchCoverSearch(searchTitle: String, onReady: (Bitmap) -> Unit) {
+                    onCoverReady = onReady
+                    coverSearchQuery = "$searchTitle album art"
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -177,13 +201,75 @@ class MainActivity : ComponentActivity() {
                             playback = playback,
                             onOpenSettings = { showSettings = true },
                             onExpandPlayer = { showNowPlaying = true },
-                            onShowQueue = { showQueue = true }
+                            onShowQueue = { showQueue = true },
+                            onSearchCoverForSong = { song ->
+                                launchCoverSearch("${song.title} ${song.artist}".trim()) { bmp ->
+                                    scope.launch(Dispatchers.IO) {
+                                        CoverArtRepository.save(context, song.title, bmp)
+                                    }
+                                }
+                            },
                         )
                     }
                     if (showQueue) {
                         QueueSheet(
                             playback = playback,
                             onDismiss = { showQueue = false }
+                        )
+                    }
+
+                    // ConfirmDownloadDialog placed here (before CoverSearchScreen) so that
+                    // when cover search opens, it draws on top by normal composable draw order.
+                    // Using a Box-based dialog instead of AlertDialog avoids the separate-window
+                    // issue where AlertDialog always renders above ALL main-window content.
+                    vm.pending?.let { pending ->
+                        ConfirmDownloadDialog(
+                            pending = pending,
+                            coverArtBitmap = downloadCoverArt,
+                            onConfirm = {
+                                vm.confirmDownload()
+                                downloadCoverArt = null
+                            },
+                            onDismiss = {
+                                vm.dismissPending()
+                                downloadCoverArt = null
+                            },
+                            onSearchCover = {
+                                launchCoverSearch(pending.video.title) { bmp ->
+                                    downloadCoverArt = bmp
+                                    scope.launch(Dispatchers.IO) {
+                                        CoverArtRepository.save(context, pending.video.title, bmp)
+                                    }
+                                }
+                            },
+                        )
+                    }
+
+                    // Cover art search WebView overlay — rendered after the dialog so it appears on top.
+                    coverSearchQuery?.let { q ->
+                        CoverSearchScreen(
+                            query = q,
+                            onImageCaptured = { bmp ->
+                                imageToCrop = bmp
+                                coverSearchQuery = null
+                            },
+                            onDismiss = {
+                                coverSearchQuery = null
+                                onCoverReady = null
+                            },
+                        )
+                    }
+
+                    // Crop overlay shown after an image is captured from the WebView
+                    imageToCrop?.let { bmp ->
+                        ImageCropScreen(
+                            bitmap = bmp,
+                            onConfirm = { cropped ->
+                                onCoverReady?.invoke(cropped)
+                                imageToCrop = null
+                                onCoverReady = null
+                            },
+                            onCancel = { imageToCrop = null },
                         )
                     }
                 }
@@ -213,6 +299,7 @@ private fun MainScaffold(
     onOpenSettings: () -> Unit,
     onExpandPlayer: () -> Unit,
     onShowQueue: () -> Unit,
+    onSearchCoverForSong: (Song) -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
@@ -225,9 +312,8 @@ private fun MainScaffold(
         }
     }
     Scaffold(
-        modifier = Modifier.imePadding(),
         bottomBar = {
-            Column {
+            Column(modifier = Modifier.imePadding()) {
                 if (pagerState.currentPage == 1) DownloadStatusBar(vm, playlistVm)
                 MiniPlayer(playback, onExpand = onExpandPlayer, onShowQueue = onShowQueue)
                 NavigationBar {
@@ -249,13 +335,16 @@ private fun MainScaffold(
     ) { innerPadding ->
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             if (page == 0) {
-                MusicScreen(modifier = Modifier.padding(innerPadding))
+                MusicScreen(
+                    modifier = Modifier.padding(innerPadding),
+                    onSearchCoverForSong = onSearchCoverForSong,
+                )
             } else {
                 ConverterScreen(
                     initState = app.initState,
                     vm = vm,
                     onOpenSettings = onOpenSettings,
-                    modifier = Modifier.padding(innerPadding)
+                    modifier = Modifier.padding(innerPadding),
                 )
             }
         }
@@ -281,7 +370,7 @@ private fun MiniPlayer(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AudioArtwork(np.artworkUri, Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)))
+            AudioArtwork(np.artworkUri, np.title, Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)))
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -358,6 +447,7 @@ private fun NowPlayingScreen(
         Spacer(Modifier.height(24.dp))
         AudioArtwork(
             np.artworkUri,
+            np.title,
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
@@ -562,6 +652,7 @@ private fun QueueSheet(playback: PlaybackViewModel, onDismiss: () -> Unit) {
                     ) {
                         AudioArtwork(
                             item.artworkUri,
+                            item.title,
                             Modifier
                                 .size(44.dp)
                                 .clip(RoundedCornerShape(6.dp))
@@ -606,7 +697,7 @@ private fun ConverterScreen(
     initState: App.InitState,
     vm: MainViewModel,
     onOpenSettings: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier
@@ -640,13 +731,6 @@ private fun ConverterScreen(
         }
     }
 
-    vm.pending?.let { pending ->
-        ConfirmDownloadDialog(
-            pending = pending,
-            onConfirm = vm::confirmDownload,
-            onDismiss = vm::dismissPending
-        )
-    }
 }
 
 @Composable
@@ -940,24 +1024,66 @@ private fun formatDuration(totalSeconds: Long): String {
 @Composable
 private fun ConfirmDownloadDialog(
     pending: PendingDownload,
+    coverArtBitmap: Bitmap?,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSearchCover: () -> Unit,
 ) {
     val v = pending.video
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Download this video?") },
-        text = {
-            Column {
-                AsyncImage(
-                    model = v.thumbnailUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                )
+    // Box-based dialog instead of AlertDialog so CoverSearchScreen (composed after this)
+    // can draw on top by normal Compose draw order — AlertDialog uses a separate Window.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable(onClick = onDismiss),
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .align(Alignment.Center)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                ) { /* consume taps so they don't fall through to the scrim */ },
+            shape = RoundedCornerShape(28.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text("Download this video?", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(16.dp))
+
+                // Show the selected cover art once the user has picked one;
+                // otherwise fall back to the YouTube video thumbnail.
+                if (coverArtBitmap != null) {
+                    Image(
+                        bitmap = coverArtBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "✓ Cover art selected",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    AsyncImage(
+                        model = v.thumbnailUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                }
+
                 Spacer(Modifier.height(12.dp))
                 Text(
                     v.title,
@@ -980,15 +1106,25 @@ private fun ConfirmDownloadDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onSearchCover,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (coverArtBitmap != null) "Change cover art" else "Search cover art")
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = onConfirm) { Text("Download (${pending.format.name})") }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Download (${pending.format.name})") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
-    )
+    }
 }
 
 @Composable

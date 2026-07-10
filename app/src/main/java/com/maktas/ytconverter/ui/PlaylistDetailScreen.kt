@@ -134,6 +134,7 @@ fun PlaylistDetailScreen(
                         ) {
                             AudioArtwork(
                                 if (missing) null else song.uri,
+                                song.title,
                                 Modifier.size(48.dp).clip(RoundedCornerShape(6.dp))
                             )
                             Spacer(Modifier.width(12.dp))

@@ -22,13 +22,18 @@ object PlaybackQueueState {
         val items: List<QueueItem> = emptyList(),
         /** Index into [items] that is currently playing (-1 when nothing). */
         val currentPosition: Int = -1,
+        val isPlaying: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    fun update(items: List<QueueItem>, currentPosition: Int) {
-        _state.value = State(items, currentPosition)
+    fun update(items: List<QueueItem>, currentPosition: Int, isPlaying: Boolean = false) {
+        _state.value = State(items, currentPosition, isPlaying)
+    }
+
+    fun updateIsPlaying(isPlaying: Boolean) {
+        _state.value = _state.value.copy(isPlaying = isPlaying)
     }
 
     fun clear() {

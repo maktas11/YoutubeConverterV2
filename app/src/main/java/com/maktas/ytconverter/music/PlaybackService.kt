@@ -3,6 +3,7 @@ package com.maktas.ytconverter.music
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -15,6 +16,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.maktas.ytconverter.MainActivity
 import com.maktas.ytconverter.data.SettingsRepository
+import com.maktas.ytconverter.widget.PlayerWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +32,12 @@ import org.json.JSONArray
 @UnstableApi
 class PlaybackService : MediaSessionService() {
 
+    companion object {
+        const val ACTION_TOGGLE_PLAY_PAUSE = "com.maktas.ytconverter.TOGGLE_PLAY_PAUSE"
+        const val ACTION_SKIP_NEXT = "com.maktas.ytconverter.SKIP_NEXT"
+        const val ACTION_SKIP_PREVIOUS = "com.maktas.ytconverter.SKIP_PREVIOUS"
+    }
+
     private var mediaSession: MediaSession? = null
     private var exoPlayer: ExoPlayer? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -42,7 +50,6 @@ class PlaybackService : MediaSessionService() {
             .build()
         exoPlayer = player
 
-        // Keep PlaybackQueueState in sync so the UI can show actual play order.
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 if (events.containsAny(
@@ -53,6 +60,11 @@ class PlaybackService : MediaSessionService() {
                 ) {
                     updateQueueState(player as ExoPlayer)
                 }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                PlaybackQueueState.updateIsPlaying(isPlaying)
+                serviceScope.launch { updateWidget() }
             }
         })
 
@@ -78,23 +90,32 @@ class PlaybackService : MediaSessionService() {
             val startIndex = saved.index.coerceIn(0, items.size - 1)
             player.setMediaItems(items, startIndex, saved.positionMs)
             player.repeatMode = saved.repeatMode
-            // Smart shuffle: re-enable; pure random doesn't touch shuffleModeEnabled.
             if (saved.shuffleEnabled && !saved.pureRandom) {
                 player.shuffleModeEnabled = true
             }
             player.prepare()
-            // Do NOT call player.play() — restore to paused so user decides when to continue.
         }
 
         val openApp = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(openApp)
             .build()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val player = exoPlayer
+        if (player != null) {
+            when (intent?.action) {
+                ACTION_TOGGLE_PLAY_PAUSE -> if (player.isPlaying) player.pause() else player.play()
+                ACTION_SKIP_NEXT -> player.seekToNext()
+                ACTION_SKIP_PREVIOUS -> player.seekToPrevious()
+            }
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     private fun parseQueueJson(json: String): List<MediaItem> = runCatching {
@@ -119,11 +140,11 @@ class PlaybackService : MediaSessionService() {
         val count = player.mediaItemCount
         if (count == 0) {
             PlaybackQueueState.clear()
+            serviceScope.launch { updateWidget() }
             return
         }
         val currentMediaIndex = player.currentMediaItemIndex
 
-        // When shuffle is on, use ExoPlayer's internal ShuffleOrder to get the real play sequence.
         val playOrder: List<Int> = if (player.shuffleModeEnabled) {
             val shuffleOrder = player.shuffleOrder
             val result = mutableListOf<Int>()
@@ -148,7 +169,18 @@ class PlaybackService : MediaSessionService() {
             )
         }
 
-        PlaybackQueueState.update(items, currentPosition = playOrder.indexOf(currentMediaIndex))
+        PlaybackQueueState.update(
+            items,
+            currentPosition = playOrder.indexOf(currentMediaIndex),
+            isPlaying = player.isPlaying,
+        )
+        serviceScope.launch { updateWidget() }
+    }
+
+    private suspend fun updateWidget() {
+        val manager = GlanceAppWidgetManager(this@PlaybackService)
+        val ids = manager.getGlanceIds(PlayerWidget::class.java)
+        for (id in ids) PlayerWidget().update(this@PlaybackService, id)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
