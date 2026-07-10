@@ -1,20 +1,28 @@
 package com.maktas.ytconverter.music
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Size
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import com.maktas.ytconverter.MainActivity
+import com.maktas.ytconverter.data.CoverArtRepository
 import com.maktas.ytconverter.data.SettingsRepository
 import com.maktas.ytconverter.widget.PlayerWidget
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +31,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import java.io.IOException
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 
 /**
  * Hosts the ExoPlayer + MediaSession. As a [MediaSessionService] it gives us
@@ -103,6 +114,7 @@ class PlaybackService : MediaSessionService() {
         )
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(openApp)
+            .setBitmapLoader(LibraryArtworkBitmapLoader(this))
             .build()
     }
 
@@ -203,4 +215,55 @@ class PlaybackService : MediaSessionService() {
         exoPlayer = null
         super.onDestroy()
     }
+}
+
+/**
+ * Supplies artwork for the system media notification / lock-screen controls.
+ * Mirrors [com.maktas.ytconverter.ui.AudioArtwork]'s own resolution order: a custom
+ * cover saved via [CoverArtRepository] keyed by title, else the audio file's embedded
+ * thumbnail. The default Media3 loader can't do either — it only decodes [MediaMetadata
+ * .artworkUri] as a literal image file, which fails silently for an audio file URI.
+ */
+private class LibraryArtworkBitmapLoader(private val context: Context) : BitmapLoader {
+    private val executor = Executors.newSingleThreadExecutor()
+
+    override fun supportsMimeType(mimeType: String): Boolean = true
+
+    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
+        Futures.submit(
+            Callable {
+                BitmapFactory.decodeByteArray(data, 0, data.size)
+                    ?: throw IOException("Could not decode artwork bytes")
+            },
+            executor
+        )
+
+    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
+        Futures.submit(
+            Callable { loadThumbnail(uri) ?: throw IOException("Could not load thumbnail for $uri") },
+            executor
+        )
+
+    override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
+        val artworkData = metadata.artworkData
+        val artworkUri = metadata.artworkUri
+        if (artworkData == null && artworkUri == null) return null
+        return Futures.submit(
+            Callable {
+                val title = metadata.title?.toString()
+                val customCover = title
+                    ?.let { CoverArtRepository.getFile(context, it) }
+                    ?.let { BitmapFactory.decodeFile(it.absolutePath) }
+                customCover
+                    ?: artworkUri?.let { loadThumbnail(it) }
+                    ?: artworkData?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                    ?: throw IOException("No artwork for $title")
+            },
+            executor
+        )
+    }
+
+    private fun loadThumbnail(uri: Uri): Bitmap? = runCatching {
+        context.contentResolver.loadThumbnail(uri, Size(512, 512), null)
+    }.getOrNull()
 }
