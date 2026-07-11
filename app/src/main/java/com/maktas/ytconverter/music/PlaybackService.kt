@@ -102,6 +102,12 @@ class PlaybackService : MediaSessionService() {
             player.setMediaItems(items, startIndex, saved.positionMs)
             player.repeatMode = saved.repeatMode
             if (saved.shuffleEnabled && !saved.pureRandom) {
+                // Reconstruct the exact saved play order rather than letting shuffleModeEnabled
+                // generate a brand-new random one, so "up next" survives a restart.
+                val savedOrder = parseIntArrayJson(saved.shuffleOrderJson)
+                if (savedOrder.size == items.size) {
+                    player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(savedOrder, System.currentTimeMillis()))
+                }
                 player.shuffleModeEnabled = true
             }
             player.prepare()
@@ -129,6 +135,11 @@ class PlaybackService : MediaSessionService() {
         }
         return super.onStartCommand(intent, flags, startId)
     }
+
+    private fun parseIntArrayJson(json: String): IntArray = runCatching {
+        val array = JSONArray(json)
+        IntArray(array.length()) { i -> array.getInt(i) }
+    }.getOrElse { IntArray(0) }
 
     private fun parseQueueJson(json: String): List<MediaItem> = runCatching {
         val array = JSONArray(json)

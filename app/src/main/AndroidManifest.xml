@@ -20,6 +20,11 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Personal sideload app, not Play-distributed — requesting this once (via a
+         one-time system Settings screen, not a runtime prompt) avoids a per-file
+         scoped-storage consent dialog every time a song is deleted. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
     <application
         android:name=".App"
         android:allowBackup="true"

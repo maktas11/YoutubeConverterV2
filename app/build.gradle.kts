@@ -80,6 +80,8 @@ dependencies {
     // Media3 for music playback (background, lock-screen / Bluetooth controls).
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
+    // Media3 Transformer for the audio editor (trim/cut, speed, pitch).
+    implementation(libs.androidx.media3.transformer)
 
     // Room for playlists.
     implementation(libs.androidx.room.runtime)

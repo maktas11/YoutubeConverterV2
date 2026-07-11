@@ -107,6 +107,7 @@ class SettingsRepository(private val context: Context) {
         val PB_SHUFFLE_ENABLED = booleanPreferencesKey("pb_shuffle_enabled")
         val PB_PURE_RANDOM = booleanPreferencesKey("pb_pure_random")
         val PB_REPEAT_MODE = intPreferencesKey("pb_repeat_mode")
+        val PB_SHUFFLE_ORDER_JSON = stringPreferencesKey("pb_shuffle_order_json")
     }
 
     val settings: Flow<Settings> = context.dataStore.data.map { it.toSettings() }
@@ -184,6 +185,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.PB_SHUFFLE_ENABLED] = state.shuffleEnabled
             prefs[Keys.PB_PURE_RANDOM] = state.pureRandom
             prefs[Keys.PB_REPEAT_MODE] = state.repeatMode
+            prefs[Keys.PB_SHUFFLE_ORDER_JSON] = state.shuffleOrderJson
         }
     }
 
@@ -197,6 +199,7 @@ class SettingsRepository(private val context: Context) {
             shuffleEnabled = prefs[Keys.PB_SHUFFLE_ENABLED] ?: false,
             pureRandom = prefs[Keys.PB_PURE_RANDOM] ?: false,
             repeatMode = prefs[Keys.PB_REPEAT_MODE] ?: 0,
+            shuffleOrderJson = prefs[Keys.PB_SHUFFLE_ORDER_JSON] ?: "",
         )
     }
 
@@ -217,4 +220,7 @@ data class SavedPlaybackState(
     val pureRandom: Boolean,
     /** 0 = off, 1 = all, 2 = one */
     val repeatMode: Int,
+    /** JSON array of underlying media-item indices in Smart-shuffle play order, so the
+     *  exact "up next" sequence survives a restart instead of being re-randomized. */
+    val shuffleOrderJson: String = "",
 )

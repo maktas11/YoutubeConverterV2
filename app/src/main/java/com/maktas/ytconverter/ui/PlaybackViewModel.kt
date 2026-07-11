@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -123,14 +124,16 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
         controllerFuture.addListener({
             controller = controllerFuture.get().also { it.addListener(listener) }
             syncState()
-            // Restore pure-random flag — ExoPlayer doesn't know about it, only ViewModel does.
+            // Restore the shuffle flag for BOTH modes — Smart shuffle's underlying order is
+            // restored service-side (PlaybackService), but the UI's own shuffleEnabled flag
+            // (drives the toggle highlight) lives only here and needs restoring separately.
             viewModelScope.launch {
                 val saved = repo.loadPlaybackState() ?: return@launch
-                if (saved.shuffleEnabled && saved.pureRandom) {
+                if (saved.shuffleEnabled) {
                     shuffleEnabled = true
-                    pureRandom = true
-                    isPureRandom = true
-                    PlaybackPrefs.pureRandomShuffle = true
+                    pureRandom = saved.pureRandom
+                    isPureRandom = saved.pureRandom
+                    if (saved.pureRandom) PlaybackPrefs.pureRandomShuffle = true
                 }
             }
         }, ContextCompat.getMainExecutor(app))
@@ -229,6 +232,20 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
                 put("artist", item.mediaMetadata.artist?.toString() ?: "")
             })
         }
+
+        // Walk the CURRENT play order (shuffle-aware if shuffle is on) via the base
+        // Timeline API, so the exact "up next" sequence can be reconstructed on restart
+        // instead of ExoPlayer generating a brand-new random order from scratch.
+        val orderArray = JSONArray()
+        val timeline = c.currentTimeline
+        var idx = timeline.getFirstWindowIndex(c.shuffleModeEnabled)
+        var safety = 0
+        while (idx != C.INDEX_UNSET && safety < count) {
+            orderArray.put(idx)
+            idx = timeline.getNextWindowIndex(idx, Player.REPEAT_MODE_OFF, c.shuffleModeEnabled)
+            safety++
+        }
+
         repo.savePlaybackState(
             SavedPlaybackState(
                 queueJson = array.toString(),
@@ -240,7 +257,8 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
                     Player.REPEAT_MODE_ALL -> 1
                     Player.REPEAT_MODE_ONE -> 2
                     else -> 0
-                }
+                },
+                shuffleOrderJson = orderArray.toString(),
             )
         )
     }

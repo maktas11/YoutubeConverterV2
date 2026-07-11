@@ -1,12 +1,18 @@
 package com.maktas.ytconverter.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import android.util.Size
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -26,16 +32,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircleOutline
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MicExternalOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -53,12 +62,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,20 +81,25 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.maktas.ytconverter.data.CoverArtRepository
 import com.maktas.ytconverter.data.playlist.PlaylistWithCount
 import com.maktas.ytconverter.music.Song
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
 fun MusicScreen(
     modifier: Modifier = Modifier,
     onSearchCoverForSong: (Song) -> Unit = {},
+    onEditSong: (Song) -> Unit = {},
 ) {
     val vm: MusicViewModel = viewModel()
     val playback: PlaybackViewModel = viewModel()
@@ -104,6 +120,22 @@ fun MusicScreen(
         val granted = ContextCompat.checkSelfPermission(context, permission) ==
             PackageManager.PERMISSION_GRANTED
         if (granted) vm.refresh() else vm.onPermissionResult(false)
+    }
+
+    // Scoped storage delete consent: MusicViewModel sets pendingDeleteIntentSender when
+    // contentResolver.delete() needs the user to approve via the system dialog.
+    val deletePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result -> vm.onDeletePermissionResult(result.resultCode == Activity.RESULT_OK) }
+
+    LaunchedEffect(vm.pendingDeleteIntentSender) {
+        vm.pendingDeleteIntentSender?.let { sender ->
+            deletePermissionLauncher.launch(IntentSenderRequest.Builder(sender).build())
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        vm.errorEvents.collect { message -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
     }
 
     var tab by rememberSaveable { mutableStateOf(0) }
@@ -138,7 +170,11 @@ fun MusicScreen(
         Spacer(Modifier.height(12.dp))
 
         if (tab == 0) {
-            SongsTab(vm, playback, playlistVm, onSearchCoverForSong, onGrant = { launcher.launch(permission) })
+            SongsTab(
+                vm, playback, playlistVm, onSearchCoverForSong,
+                onGrant = { launcher.launch(permission) },
+                onEditSong = onEditSong,
+            )
         } else {
             PlaylistsPane(playlistVm)
         }
@@ -160,12 +196,13 @@ private fun SongsTab(
     playback: PlaybackViewModel,
     playlistVm: PlaylistViewModel,
     onSearchCoverForSong: (Song) -> Unit,
-    onGrant: () -> Unit
+    onGrant: () -> Unit,
+    onEditSong: (Song) -> Unit,
 ) {
     when (val s = vm.state) {
         LibraryUiState.NeedsPermission -> PermissionPrompt(onGrant)
         LibraryUiState.Loading -> LoadingState()
-        is LibraryUiState.Loaded -> LoadedLibrary(vm, s.songs, playback, playlistVm, onSearchCoverForSong)
+        is LibraryUiState.Loaded -> LoadedLibrary(vm, s.songs, playback, playlistVm, onSearchCoverForSong, onEditSong)
     }
 }
 
@@ -176,6 +213,55 @@ private fun PermissionPrompt(onGrant: () -> Unit) {
         message = "Allow access to your audio files to see your music library.",
         action = { Button(onClick = onGrant) { Text("Grant access") } }
     )
+}
+
+/**
+ * Prompts once for "All files access" so deleting a song doesn't need a per-file
+ * scoped-storage consent dialog every time. Rechecked on resume since granting it
+ * happens in a separate system Settings screen with no direct callback.
+ */
+@Composable
+private fun StorageAccessBanner() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(Environment.isExternalStorageManager()) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                granted = Environment.isExternalStorageManager()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (granted) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Enable full storage access to delete songs without a confirmation popup every time.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = {
+            val intent = runCatching {
+                Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}"),
+                )
+            }.getOrElse { Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION) }
+            context.startActivity(intent)
+        }) { Text("Enable") }
+    }
 }
 
 @Composable
@@ -198,7 +284,9 @@ private fun LoadedLibrary(
     playback: PlaybackViewModel,
     playlistVm: PlaylistViewModel,
     onSearchCoverForSong: (Song) -> Unit,
+    onEditSong: (Song) -> Unit,
 ) {
+    StorageAccessBanner()
     OutlinedTextField(
         value = vm.query,
         onValueChange = vm::onQueryChange,
@@ -207,6 +295,13 @@ private fun LoadedLibrary(
         modifier = Modifier.fillMaxWidth()
     )
     Spacer(Modifier.height(8.dp))
+
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val currentSongIndex = songs.indexOfFirst {
+        it.title == playback.nowPlaying?.title && it.artist == playback.nowPlaying?.artist
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             "${songs.size} song${if (songs.size == 1) "" else "s"}",
@@ -214,6 +309,12 @@ private fun LoadedLibrary(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
+        IconButton(
+            onClick = { scope.launch { listState.animateScrollToItem(currentSongIndex) } },
+            enabled = currentSongIndex >= 0,
+        ) {
+            Icon(Icons.Filled.MyLocation, contentDescription = "Go to current song")
+        }
         IconButton(onClick = vm::refresh) {
             Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
         }
@@ -238,7 +339,7 @@ private fun LoadedLibrary(
         var addingToPlaylist by remember { mutableStateOf<Song?>(null) }
         var actionSong by remember { mutableStateOf<Song?>(null) }
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                 SongRow(
                     song = song,
@@ -264,6 +365,7 @@ private fun LoadedLibrary(
                 song = song,
                 onAddToPlaylist = { addingToPlaylist = song; actionSong = null },
                 onChangeCover = { onSearchCoverForSong(song); actionSong = null },
+                onEdit = { onEditSong(song); actionSong = null },
                 onDelete = { vm.deleteSong(song); actionSong = null },
                 onHide = { vm.hideSong(song); actionSong = null },
                 onDismiss = { actionSong = null }
@@ -327,6 +429,7 @@ private fun SongActionDialog(
     song: Song,
     onAddToPlaylist: () -> Unit,
     onChangeCover: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit,
     onDismiss: () -> Unit,
@@ -369,6 +472,12 @@ private fun SongActionDialog(
                     text = { Text("Add to playlist") },
                     leadingIcon = { Icon(Icons.Filled.AddCircleOutline, contentDescription = null) },
                     onClick = onAddToPlaylist
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Edit audio (trim, speed, pitch)") },
+                    leadingIcon = { Icon(Icons.Filled.ContentCut, contentDescription = null) },
+                    onClick = onEdit
                 )
                 HorizontalDivider()
                 DropdownMenuItem(

@@ -116,6 +116,7 @@ import com.maktas.ytconverter.download.SearchResult
 import com.maktas.ytconverter.music.Song
 import com.maktas.ytconverter.ui.AddToPlaylistDialog
 import com.maktas.ytconverter.ui.AudioArtwork
+import com.maktas.ytconverter.ui.AudioEditorScreen
 import com.maktas.ytconverter.ui.CoverSearchScreen
 import com.maktas.ytconverter.ui.ImageCropScreen
 import com.maktas.ytconverter.ui.MainViewModel
@@ -160,6 +161,7 @@ class MainActivity : ComponentActivity() {
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 var showNowPlaying by rememberSaveable { mutableStateOf(false) }
                 var showQueue by rememberSaveable { mutableStateOf(false) }
+                var editingSong by remember { mutableStateOf<Song?>(null) }
                 val playback: PlaybackViewModel = viewModel()
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
@@ -180,43 +182,53 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    when {
-                        showSettings -> {
-                            BackHandler { showSettings = false }
-                            Scaffold { innerPadding ->
-                                SettingsScreen(
-                                    vm = vm,
-                                    onBack = { showSettings = false },
-                                    modifier = Modifier.padding(innerPadding)
-                                )
-                            }
-                        }
-
-                        showNowPlaying -> {
-                            BackHandler { showNowPlaying = false }
-                            NowPlayingScreen(
-                                playback = playback,
-                                onClose = { showNowPlaying = false },
-                                onShowQueue = { showQueue = true }
-                            )
-                        }
-
-                        else -> MainScaffold(
-                            app = app,
-                            vm = vm,
-                            playback = playback,
-                            onOpenSettings = { showSettings = true },
-                            onExpandPlayer = { showNowPlaying = true },
-                            onShowQueue = { showQueue = true },
-                            onSearchCoverForSong = { song ->
-                                launchCoverSearch("${song.title} ${song.artist}".trim()) { bmp ->
-                                    scope.launch(Dispatchers.IO) {
-                                        CoverArtRepository.save(context, song.title, bmp)
-                                    }
+                    // MainScaffold stays permanently mounted — Now Playing and Settings are
+                    // drawn as overlays on top of it, not swapped in via a mutually-exclusive
+                    // branch. Otherwise leaving/returning from either tears down and rebuilds
+                    // the whole Music tab underneath, losing the song list's scroll position
+                    // and re-triggering its initial-load effect.
+                    MainScaffold(
+                        app = app,
+                        vm = vm,
+                        playback = playback,
+                        onOpenSettings = { showSettings = true },
+                        onExpandPlayer = { showNowPlaying = true },
+                        onShowQueue = { showQueue = true },
+                        onSearchCoverForSong = { song ->
+                            launchCoverSearch("${song.title} ${song.artist}".trim()) { bmp ->
+                                scope.launch(Dispatchers.IO) {
+                                    CoverArtRepository.save(context, song.title, bmp)
                                 }
-                            },
+                            }
+                        },
+                        onEditSong = { song -> editingSong = song },
+                    )
+
+                    if (editingSong != null) {
+                        BackHandler { editingSong = null }
+                        AudioEditorScreen(song = editingSong!!, onDismiss = { editingSong = null })
+                    }
+
+                    if (showNowPlaying) {
+                        BackHandler { showNowPlaying = false }
+                        NowPlayingScreen(
+                            playback = playback,
+                            onClose = { showNowPlaying = false },
+                            onShowQueue = { showQueue = true }
                         )
                     }
+
+                    if (showSettings) {
+                        BackHandler { showSettings = false }
+                        Scaffold { innerPadding ->
+                            SettingsScreen(
+                                vm = vm,
+                                onBack = { showSettings = false },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                    }
+
                     if (showQueue) {
                         QueueSheet(
                             playback = playback,
@@ -306,6 +318,7 @@ private fun MainScaffold(
     onExpandPlayer: () -> Unit,
     onShowQueue: () -> Unit,
     onSearchCoverForSong: (Song) -> Unit,
+    onEditSong: (Song) -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
@@ -345,6 +358,7 @@ private fun MainScaffold(
                     MusicScreen(
                         modifier = Modifier.padding(innerPadding),
                         onSearchCoverForSong = onSearchCoverForSong,
+                        onEditSong = onEditSong,
                     )
                 } else {
                     ConverterScreen(
@@ -432,6 +446,11 @@ private fun NowPlayingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            // Swallows any tap that isn't already claimed by a child button — without this,
+            // blank space here lets clicks fall through to MainScaffold's Settings button
+            // (and anything else) underneath, since a plain background doesn't consume touches.
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
             .systemBarsPadding()
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
