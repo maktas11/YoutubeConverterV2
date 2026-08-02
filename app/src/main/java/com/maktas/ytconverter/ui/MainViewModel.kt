@@ -112,6 +112,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 durationSeconds = result.durationSeconds,
                 thumbnailUrl = result.thumbnailUrl,
                 videoUrl = result.videoUrl,
+                id = result.id,
             ),
             format = settings.value.searchFormat,
         )
@@ -137,20 +138,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmDownload() {
         val p = pending ?: return
         pending = null
-        startDownload(p.video.videoUrl, p.format, p.video.title)
+        startDownload(p.video.videoUrl, p.format, p.video.title, p.video.id)
     }
 
     fun dismissPending() {
         pending = null
     }
 
-    private fun startDownload(target: String, format: DownloadFormat, title: String?) {
+    private fun startDownload(target: String, format: DownloadFormat, title: String?, videoId: String?) {
         if (target.isEmpty() || DownloadController.isRunning) return
         val intent = Intent(getApplication(), DownloadService::class.java).apply {
             action = DownloadService.ACTION_DOWNLOAD
             putExtra(DownloadService.EXTRA_URL, target)
             putExtra(DownloadService.EXTRA_FORMAT, format.name)
             title?.let { putExtra(DownloadService.EXTRA_TITLE, it) }
+            videoId?.let { putExtra(DownloadService.EXTRA_VIDEO_ID, it) }
         }
         ContextCompat.startForegroundService(getApplication(), intent)
     }

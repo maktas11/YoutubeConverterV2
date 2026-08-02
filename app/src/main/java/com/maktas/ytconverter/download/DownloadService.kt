@@ -54,7 +54,11 @@ class DownloadService : Service() {
                     val format = runCatching {
                         DownloadFormat.valueOf(intent.getStringExtra(EXTRA_FORMAT) ?: "")
                     }.getOrDefault(DownloadFormat.M4A)
-                    startDownload(url, format, intent.getStringExtra(EXTRA_TITLE))
+                    startDownload(
+                        url, format,
+                        intent.getStringExtra(EXTRA_TITLE),
+                        intent.getStringExtra(EXTRA_VIDEO_ID),
+                    )
                 }
             }
             else -> stopSelf()
@@ -62,7 +66,7 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startDownload(url: String, format: DownloadFormat, title: String?) {
+    private fun startDownload(url: String, format: DownloadFormat, title: String?, videoId: String?) {
         kindLabel = if (format == DownloadFormat.MP4) "video" else "audio"
         currentTitle = title
         createChannel()
@@ -100,6 +104,12 @@ class DownloadService : Service() {
                     onSuccess = { notifyDone("Download complete", it.displayName) },
                     onFailure = { notifyDone("Download failed", ErrorMapper.friendly(it.message)) },
                 )
+            }
+            // Fetch YouTube's own best-res thumbnail as the song's cover — the embedded one
+            // yt-dlp chose during download is often noticeably lower quality. Video downloads
+            // don't have a library cover concept, so this only applies to audio.
+            if (result.isSuccess && format != DownloadFormat.MP4 && videoId != null && title != null) {
+                runCatching { YouTubeThumbnail.fetchAndSaveCover(applicationContext, videoId, title) }
             }
             stopSelf()
         }
@@ -191,6 +201,7 @@ class DownloadService : Service() {
         const val EXTRA_URL = "com.maktas.ytconverter.extra.URL"
         const val EXTRA_FORMAT = "com.maktas.ytconverter.extra.FORMAT"
         const val EXTRA_TITLE = "com.maktas.ytconverter.extra.TITLE"
+        const val EXTRA_VIDEO_ID = "com.maktas.ytconverter.extra.VIDEO_ID"
         private const val CHANNEL_ID = "downloads"
         private const val NOTIF_ID = 1001
         private const val DONE_NOTIF_ID = 1002

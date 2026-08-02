@@ -23,6 +23,8 @@ data class VideoPreview(
     val durationSeconds: Long,
     val thumbnailUrl: String,
     val videoUrl: String,
+    /** Used after download to fetch YouTube's actual best thumbnail (see YouTubeThumbnail). */
+    val id: String? = null,
 )
 
 /**
@@ -68,6 +70,7 @@ object Searcher {
                         ?: id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
                         ?: "",
                     videoUrl = info.webpageUrl ?: url,
+                    id = id,
                 )
             )
         } catch (e: Exception) {
