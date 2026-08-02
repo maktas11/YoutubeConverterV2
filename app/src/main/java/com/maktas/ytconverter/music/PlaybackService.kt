@@ -189,6 +189,7 @@ class PlaybackService : MediaSessionService() {
                 title = item.mediaMetadata.title?.toString().orEmpty(),
                 artist = item.mediaMetadata.artist?.toString().orEmpty(),
                 artworkUri = item.mediaMetadata.artworkUri?.toString(),
+                mediaItemIndex = i,
             )
         }
 

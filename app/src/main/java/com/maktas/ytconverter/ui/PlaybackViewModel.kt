@@ -34,6 +34,9 @@ data class NowPlaying(
     val title: String,
     val artist: String,
     val artworkUri: String?,
+    /** This item's real index in the underlying (unshuffled) player queue, for seeking to it.
+     *  Only meaningful for queue-list items; -1 for the plain "current track" display. */
+    val mediaItemIndex: Int = -1,
 )
 
 enum class RepeatMode { OFF, ALL, ONE }
@@ -114,7 +117,7 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
         // Collect the actual play-order queue pushed by PlaybackService.
         viewModelScope.launch {
             PlaybackQueueState.state.collect { qs ->
-                queue = qs.items.map { NowPlaying(it.title, it.artist, it.artworkUri) }
+                queue = qs.items.map { NowPlaying(it.title, it.artist, it.artworkUri, it.mediaItemIndex) }
                 currentIndex = qs.currentPosition
             }
         }
@@ -172,6 +175,15 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
     fun togglePlayPause() {
         val c = controller ?: return
         if (c.isPlaying) c.pause() else c.play()
+    }
+
+    /** Jumps to and plays the queue-sheet item at [queueIndex] (a position within [queue],
+     *  not the underlying player index — [NowPlaying.mediaItemIndex] handles that mapping). */
+    fun playQueueItem(queueIndex: Int) {
+        val c = controller ?: return
+        val target = queue.getOrNull(queueIndex) ?: return
+        c.seekTo(target.mediaItemIndex, 0L)
+        c.play()
     }
 
     fun next() {

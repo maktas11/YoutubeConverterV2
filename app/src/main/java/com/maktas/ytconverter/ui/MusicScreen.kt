@@ -17,12 +17,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -340,12 +342,34 @@ private fun LoadedLibrary(
         var addingToPlaylist by remember { mutableStateOf<Song?>(null) }
         var actionSong by remember { mutableStateOf<Song?>(null) }
 
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
-                SongRow(
-                    song = song,
-                    onClick = { playback.play(songs, index) },
-                    onMoreOptions = { actionSong = song },
+        Row(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
+                itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                    SongRow(
+                        song = song,
+                        onClick = { playback.play(songs, index) },
+                        onMoreOptions = { actionSong = song },
+                    )
+                }
+            }
+
+            if (vm.sortMode == SortMode.TITLE) {
+                // First index for each letter — only meaningful since songs are A-Z sorted here.
+                val letterIndices = remember(songs) {
+                    val map = mutableMapOf<Char, Int>()
+                    songs.forEachIndexed { index, song ->
+                        val letter = song.title.trim().firstOrNull()?.uppercaseChar()
+                        if (letter != null && letter in 'A'..'Z' && letter !in map) map[letter] = index
+                    }
+                    map
+                }
+                AlphabetSidebar(
+                    availableLetters = letterIndices.keys,
+                    onLetterSelected = { letter ->
+                        val target = letterIndices[letter]
+                            ?: letterIndices.keys.minByOrNull { kotlin.math.abs(it - letter) }?.let { letterIndices[it] }
+                        target?.let { scope.launch { listState.scrollToItem(it) } }
+                    },
                 )
             }
         }
@@ -370,6 +394,33 @@ private fun LoadedLibrary(
                 onDelete = { vm.deleteSong(song); actionSong = null },
                 onHide = { vm.hideSong(song); actionSong = null },
                 onDismiss = { actionSong = null }
+            )
+        }
+    }
+}
+
+/** Fast-scroll index shown alongside the song list in A-Z sort mode. Tapping a letter jumps
+ *  to the first song starting with it; letters with no songs still work, jumping to the
+ *  nearest letter that does (shown dimmed to indicate there's no exact match). */
+@Composable
+private fun AlphabetSidebar(
+    availableLetters: Set<Char>,
+    onLetterSelected: (Char) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        ('A'..'Z').forEach { letter ->
+            Text(
+                letter.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (letter in availableLetters) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.clickable { onLetterSelected(letter) },
             )
         }
     }

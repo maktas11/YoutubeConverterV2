@@ -697,6 +697,7 @@ private fun QueueSheet(playback: PlaybackViewModel, onDismiss: () -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clickable { playback.playQueueItem(index) }
                             .background(
                                 if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
                                 else Color.Transparent

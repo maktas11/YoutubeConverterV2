@@ -9,6 +9,8 @@ data class QueueItem(
     val title: String,
     val artist: String,
     val artworkUri: String?,
+    /** This item's real index in the underlying (unshuffled) player queue, for seeking to it. */
+    val mediaItemIndex: Int,
 )
 
 /**
