@@ -191,6 +191,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setCustomSeed(value: Int) = launchSetting { settingsRepo.setCustomSeed(value) }
     fun setCustomRoleColor(role: CustomColorRole, value: Int?) =
         launchSetting { settingsRepo.setCustomRoleColor(role, value) }
+    fun setDownloadFolderUri(value: String?) = launchSetting { settingsRepo.setDownloadFolderUri(value) }
 
     private inline fun launchSetting(crossinline block: suspend () -> Unit) {
         viewModelScope.launch { block() }

@@ -1,6 +1,10 @@
 package com.maktas.ytconverter.ui
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -28,10 +33,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.maktas.ytconverter.data.AppTheme
 import com.maktas.ytconverter.data.ShuffleStyle
 import com.maktas.ytconverter.data.VideoQuality
+import com.maktas.ytconverter.download.DownloadLocation
 import com.maktas.ytconverter.download.UpdateChannel
 
 @Composable
@@ -44,6 +51,18 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = M
 
     val settings by vm.settings.collectAsState()
     val update = vm.updateState
+    val context = LocalContext.current
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            vm.setDownloadFolderUri(uri.toString())
+        }
+    }
 
     Column(
         modifier = modifier
@@ -72,6 +91,27 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, modifier: Modifier = M
         SectionTitle("Embeds")
         SwitchRow("Embed thumbnail (cover art)", settings.embedThumbnail, vm::setEmbedThumbnail)
         SwitchRow("Embed metadata (title, artist)", settings.embedMetadata, vm::setEmbedMetadata)
+
+        SectionDivider()
+
+        SectionTitle("Download location")
+        Text(
+            settings.downloadFolderUri?.let { "Saving to: ${DownloadLocation.displayLabel(it)}" }
+                ?: "Saving to the default Downloads folder",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { folderPicker.launch(null) }) {
+                Text("Choose folder")
+            }
+            if (settings.downloadFolderUri != null) {
+                TextButton(onClick = { vm.setDownloadFolderUri(null) }) {
+                    Text("Reset to default")
+                }
+            }
+        }
 
         SectionDivider()
 

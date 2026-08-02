@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maktas.ytconverter.data.SettingsRepository
+import com.maktas.ytconverter.data.SortMode
 import com.maktas.ytconverter.download.DownloadController
 import com.maktas.ytconverter.download.DownloadUiState
 import com.maktas.ytconverter.music.MusicLibrary
@@ -23,8 +24,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-enum class SortMode { NEWEST, TITLE }
 
 /** State of the music library tab. */
 sealed interface LibraryUiState {
@@ -59,6 +58,10 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
+            sortMode = settings.settings.first().sortMode
+            applyView()
+        }
+        viewModelScope.launch {
             DownloadController.state
                 .drop(1)
                 .collect { downloadState ->
@@ -77,6 +80,7 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
     fun setSort(mode: SortMode) {
         sortMode = mode
         applyView()
+        viewModelScope.launch { settings.setSortMode(mode) }
     }
 
     fun onPermissionResult(granted: Boolean) {

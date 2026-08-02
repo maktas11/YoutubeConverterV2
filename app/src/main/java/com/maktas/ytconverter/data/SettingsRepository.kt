@@ -30,6 +30,9 @@ enum class DownloadFormat { M4A, MP3, MP4 }
 /** How shuffle behaves. SMART = each song once before repeating; PURE_RANDOM = fully random. */
 enum class ShuffleStyle { SMART, PURE_RANDOM }
 
+/** Music library sort order. */
+enum class SortMode { NEWEST, TITLE }
+
 /**
  * Where the app's color scheme comes from. DYNAMIC = match the phone wallpaper
  * (Material You, Android 12+); PRESET = one of the curated [ColorPresets]; CUSTOM =
@@ -72,6 +75,9 @@ data class Settings(
     val colorThemeMode: ColorThemeMode = ColorThemeMode.DYNAMIC,
     val colorPresetId: String = ColorPresets.default.id,
     val customColors: CustomColors = CustomColors(),
+    /** SAF tree URI for a custom download folder, or null for the default Downloads folder. */
+    val downloadFolderUri: String? = null,
+    val sortMode: SortMode = SortMode.NEWEST,
 )
 
 // One DataStore per process, keyed on the (application) Context.
@@ -100,6 +106,8 @@ class SettingsRepository(private val context: Context) {
         val CUSTOM_NEUTRAL = intPreferencesKey("custom_neutral")
         val CUSTOM_NEUTRAL_VARIANT = intPreferencesKey("custom_neutral_variant")
         val CUSTOM_ERROR = intPreferencesKey("custom_error")
+        val DOWNLOAD_FOLDER_URI = stringPreferencesKey("download_folder_uri")
+        val SORT_MODE = stringPreferencesKey("music_sort_mode")
         // Playback state restore
         val PB_QUEUE_JSON = stringPreferencesKey("pb_queue_json")
         val PB_QUEUE_INDEX = intPreferencesKey("pb_queue_index")
@@ -132,6 +140,8 @@ class SettingsRepository(private val context: Context) {
             neutralVariant = this[Keys.CUSTOM_NEUTRAL_VARIANT],
             error = this[Keys.CUSTOM_ERROR],
         ),
+        downloadFolderUri = this[Keys.DOWNLOAD_FOLDER_URI],
+        sortMode = enumOr(this[Keys.SORT_MODE], SortMode.NEWEST),
     )
 
     suspend fun setUrlFormat(value: DownloadFormat) = put(Keys.URL_FORMAT, value.name)
@@ -163,6 +173,15 @@ class SettingsRepository(private val context: Context) {
             if (value != null) prefs[key] = value else prefs.remove(key)
         }
     }
+
+    /** Sets the custom download folder (a SAF tree URI string), or clears it back to default. */
+    suspend fun setDownloadFolderUri(value: String?) {
+        context.dataStore.edit { prefs ->
+            if (value != null) prefs[Keys.DOWNLOAD_FOLDER_URI] = value else prefs.remove(Keys.DOWNLOAD_FOLDER_URI)
+        }
+    }
+
+    suspend fun setSortMode(value: SortMode) = put(Keys.SORT_MODE, value.name)
 
     suspend fun lastUpdateCheck(): Long = context.dataStore.data.first()[Keys.LAST_UPDATE_CHECK] ?: 0L
     suspend fun setLastUpdateCheck(value: Long) =

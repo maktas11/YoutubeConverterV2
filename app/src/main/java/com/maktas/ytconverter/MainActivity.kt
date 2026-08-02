@@ -78,6 +78,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -96,6 +97,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -103,6 +106,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -158,6 +163,20 @@ class MainActivity : ComponentActivity() {
                 customColors = settings.customColors,
             ) {
                 RequestNotificationPermission()
+
+                // A focused text field doesn't lose Compose focus just because the app is
+                // backgrounded — Android then reopens the keyboard for it the instant you
+                // switch back. Clearing focus app-wide on ON_STOP prevents that everywhere.
+                val focusManager = LocalFocusManager.current
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_STOP) focusManager.clearFocus(force = true)
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 var showNowPlaying by rememberSaveable { mutableStateOf(false) }
                 var showQueue by rememberSaveable { mutableStateOf(false) }
@@ -667,7 +686,9 @@ private fun QueueSheet(playback: PlaybackViewModel, onDismiss: () -> Unit) {
             }
             val listState = rememberLazyListState()
             val currentIndex = playback.currentIndex
-            LaunchedEffect(Unit) {
+            // Keyed on the queue itself (not Unit) so reshuffling while the sheet is already
+            // open re-triggers this scroll too, not just the first time the sheet opens.
+            LaunchedEffect(playback.queue, currentIndex) {
                 if (currentIndex >= 0) listState.scrollToItem(currentIndex)
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxWidth()) {

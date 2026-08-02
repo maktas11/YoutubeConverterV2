@@ -77,16 +77,19 @@ class DownloadService : Service() {
                 DownloadFormat.MP4 -> Downloader.downloadVideo(
                     applicationContext, url, processId,
                     settings.videoQuality, settings.embedThumbnail, settings.embedMetadata,
+                    settings.downloadFolderUri,
                     ::handleProgress,
                 )
                 DownloadFormat.M4A -> Downloader.downloadAudio(
                     applicationContext, url, processId,
                     AudioFormat.M4A, settings.embedThumbnail, settings.embedMetadata,
+                    settings.downloadFolderUri,
                     ::handleProgress,
                 )
                 DownloadFormat.MP3 -> Downloader.downloadAudio(
                     applicationContext, url, processId,
                     AudioFormat.MP3, settings.embedThumbnail, settings.embedMetadata,
+                    settings.downloadFolderUri,
                     ::handleProgress,
                 )
             }

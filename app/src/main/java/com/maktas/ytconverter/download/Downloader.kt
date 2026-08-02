@@ -28,8 +28,9 @@ object Downloader {
         format: AudioFormat,
         embedThumbnail: Boolean,
         embedMetadata: Boolean,
+        downloadFolderUri: String?,
         onProgress: (percent: Float, etaSeconds: Long) -> Unit,
-    ): Result<Saved> = runDownload(context, url, processId, onProgress) {
+    ): Result<Saved> = runDownload(context, url, processId, downloadFolderUri, onProgress) {
         when (format) {
             AudioFormat.M4A -> addOption("-f", "ba[ext=m4a]/ba")
             AudioFormat.MP3 -> {
@@ -50,8 +51,9 @@ object Downloader {
         quality: VideoQuality,
         embedThumbnail: Boolean,
         embedMetadata: Boolean,
+        downloadFolderUri: String?,
         onProgress: (percent: Float, etaSeconds: Long) -> Unit,
-    ): Result<Saved> = runDownload(context, url, processId, onProgress) {
+    ): Result<Saved> = runDownload(context, url, processId, downloadFolderUri, onProgress) {
         addOption("-f", videoFormat(quality))
         addOption("--merge-output-format", "mp4")
         applyEmbeds(embedThumbnail, embedMetadata)
@@ -67,6 +69,7 @@ object Downloader {
         context: Context,
         url: String,
         processId: String,
+        downloadFolderUri: String?,
         onProgress: (Float, Long) -> Unit,
         configure: YoutubeDLRequest.() -> Unit,
     ): Result<Saved> = withContext(Dispatchers.IO) {
@@ -93,7 +96,12 @@ object Downloader {
                     IllegalStateException("Download finished but produced no file")
                 )
 
-            Result.success(Saved(MediaStoreSaver.saveToDownloads(context, file)))
+            val savedName = if (downloadFolderUri != null) {
+                DownloadLocation.saveToCustomFolder(context, downloadFolderUri, file)
+            } else {
+                MediaStoreSaver.saveToDownloads(context, file)
+            }
+            Result.success(Saved(savedName))
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
