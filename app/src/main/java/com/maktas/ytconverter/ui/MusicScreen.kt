@@ -2,13 +2,17 @@ package com.maktas.ytconverter.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import android.util.LruCache
 import android.util.Size
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -805,16 +809,37 @@ private fun EmptyState(
     }
 }
 
+/** Artwork resolution used by list rows — matches the old hardcoded thumbnail size. */
+const val ART_PX_LIST = 256
+
+/** Artwork resolution for full-width displays (Now Playing). Album art is commonly
+ *  embedded at 1000x1000 or larger, so this keeps a big cover sharp instead of
+ *  upscaling a thumbnail across the whole screen. */
+const val ART_PX_FULL = 1080
+
 /**
- * Shows custom cover art (if set via CoverArtRepository) or falls back to the
- * embedded MediaStore thumbnail, then to a generic music note icon.
+ * Shows custom cover art (if set via CoverArtRepository), then the artwork embedded in
+ * the file itself, then MediaStore's generated thumbnail, then a generic music note icon.
+ *
+ * [targetSizePx] is the shortest edge this will be drawn at. The embedded picture is
+ * decoded downsampled to it, so list rows stay cheap while Now Playing gets full detail.
  */
 @Composable
-fun AudioArtwork(uri: String?, title: String? = null, modifier: Modifier = Modifier) {
+fun AudioArtwork(
+    uri: String?,
+    title: String? = null,
+    modifier: Modifier = Modifier,
+    targetSizePx: Int = ART_PX_LIST,
+) {
     val context = LocalContext.current
     val version by CoverArtRepository.version.collectAsState()
 
-    val art by produceState<ImageBitmap?>(initialValue = null, uri, title, version) {
+    val art by produceState<ImageBitmap?>(initialValue = null, uri, title, version, targetSizePx) {
+        val cacheKey = "$title|$uri|$targetSizePx"
+        ArtworkCache.get(cacheKey, version)?.let {
+            value = it
+            return@produceState
+        }
         value = withContext(Dispatchers.IO) {
             // 1. Custom cover keyed by title
             if (title != null) {
@@ -823,15 +848,21 @@ fun AudioArtwork(uri: String?, title: String? = null, modifier: Modifier = Modif
                         ?.let { return@withContext it }
                 }
             }
-            // 2. Embedded thumbnail from MediaStore
+            val parsed = uri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                ?: return@withContext null
+            // 2. Artwork embedded in the file. This is the original the tagger wrote, and
+            //    the source MediaStore derives its thumbnail cache from — reading it here
+            //    skips that lossy downscale.
+            embeddedArtwork(context, parsed, targetSizePx)?.asImageBitmap()
+                ?.let { return@withContext it }
+            // 3. MediaStore's generated thumbnail, for files with no embedded picture.
             runCatching {
-                uri?.let {
-                    context.contentResolver
-                        .loadThumbnail(Uri.parse(it), Size(256, 256), null)
-                        .asImageBitmap()
-                }
+                context.contentResolver
+                    .loadThumbnail(parsed, Size(targetSizePx, targetSizePx), null)
+                    .asImageBitmap()
             }.getOrNull()
         }
+        value?.let { ArtworkCache.put(cacheKey, it, version) }
     }
     Box(
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
@@ -853,6 +884,70 @@ fun AudioArtwork(uri: String?, title: String? = null, modifier: Modifier = Modif
             )
         }
     }
+}
+
+/**
+ * In-memory artwork cache. Reading embedded art costs more than MediaStore's thumbnail
+ * cache did, so without this a long list would re-decode every row on every scroll pass.
+ * Entries are dropped wholesale whenever a cover is saved (the [CoverArtRepository]
+ * version changes), since that's the only way artwork changes under us.
+ */
+private object ArtworkCache {
+    // 1/8th of the heap, the conventional bitmap-cache budget, measured in KB.
+    private val cache = object : LruCache<String, ImageBitmap>(
+        ((Runtime.getRuntime().maxMemory() / 1024) / 8).toInt().coerceAtLeast(4096)
+    ) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int =
+            (value.width.toLong() * value.height * 4 / 1024).toInt().coerceAtLeast(1)
+    }
+    private var cachedVersion = 0L
+
+    @Synchronized
+    fun get(key: String, version: Long): ImageBitmap? {
+        if (version != cachedVersion) return null
+        return cache.get(key)
+    }
+
+    @Synchronized
+    fun put(key: String, bitmap: ImageBitmap, version: Long) {
+        if (version != cachedVersion) {
+            cache.evictAll()
+            cachedVersion = version
+        }
+        cache.put(key, bitmap)
+    }
+}
+
+/** Reads the cover art embedded in an audio file, downsampled to [targetSizePx].
+ *  Returns null when the file has no embedded picture or can't be read. */
+private fun embeddedArtwork(context: Context, uri: Uri, targetSizePx: Int): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, uri)
+        retriever.embeddedPicture?.let { bytes -> decodeSampled(bytes, targetSizePx) }
+    } catch (e: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+/** Decodes [bytes] no smaller than [targetSizePx] on its shortest edge. Only ever
+ *  halves the source, so the result is never upscaled or blurred. */
+private fun decodeSampled(bytes: ByteArray, targetSizePx: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sample = 1
+    var shortest = minOf(bounds.outWidth, bounds.outHeight)
+    while (shortest / 2 >= targetSizePx) {
+        sample *= 2
+        shortest /= 2
+    }
+
+    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
 private fun formatMs(ms: Long): String {

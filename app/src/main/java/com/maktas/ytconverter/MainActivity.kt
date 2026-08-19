@@ -119,6 +119,7 @@ import com.maktas.ytconverter.data.DownloadFormat
 import com.maktas.ytconverter.download.DownloadUiState
 import com.maktas.ytconverter.download.SearchResult
 import com.maktas.ytconverter.music.Song
+import com.maktas.ytconverter.ui.ART_PX_FULL
 import com.maktas.ytconverter.ui.AddToPlaylistDialog
 import com.maktas.ytconverter.ui.AudioArtwork
 import com.maktas.ytconverter.ui.AudioEditorScreen
@@ -507,7 +508,10 @@ private fun NowPlayingScreen(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(16.dp)),
+            // Drawn at roughly the full screen width, so the list-row thumbnail size
+            // would visibly upscale here.
+            targetSizePx = ART_PX_FULL,
         )
         Spacer(Modifier.height(24.dp))
         Text(
