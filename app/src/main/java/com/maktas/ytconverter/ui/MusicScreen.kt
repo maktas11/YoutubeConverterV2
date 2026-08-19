@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MicExternalOff
@@ -134,6 +135,18 @@ fun MusicScreen(
     LaunchedEffect(vm.pendingDeleteIntentSender) {
         vm.pendingDeleteIntentSender?.let { sender ->
             deletePermissionLauncher.launch(IntentSenderRequest.Builder(sender).build())
+        }
+    }
+
+    // Same again for editing a song this app doesn't own — the rename has already applied
+    // in-app, so declining here just leaves MediaStore untouched.
+    val writePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result -> vm.onWritePermissionResult(result.resultCode == Activity.RESULT_OK) }
+
+    LaunchedEffect(vm.pendingWriteIntentSender) {
+        vm.pendingWriteIntentSender?.let { sender ->
+            writePermissionLauncher.launch(IntentSenderRequest.Builder(sender).build())
         }
     }
 
@@ -341,6 +354,7 @@ private fun LoadedLibrary(
         val playlists by playlistVm.playlists.collectAsState()
         var addingToPlaylist by remember { mutableStateOf<Song?>(null) }
         var actionSong by remember { mutableStateOf<Song?>(null) }
+        var editingDetails by remember { mutableStateOf<Song?>(null) }
 
         Row(modifier = Modifier.fillMaxSize()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
@@ -385,9 +399,22 @@ private fun LoadedLibrary(
             )
         }
 
+        editingDetails?.let { song ->
+            EditSongDetailsDialog(
+                song = song,
+                onSave = { title, artist ->
+                    vm.editSong(song, title, artist)
+                    playback.updateSongMetadata(song.uri, title.trim(), artist.trim())
+                    editingDetails = null
+                },
+                onDismiss = { editingDetails = null },
+            )
+        }
+
         actionSong?.let { song ->
             SongActionDialog(
                 song = song,
+                onEditDetails = { editingDetails = song; actionSong = null },
                 onAddToPlaylist = { addingToPlaylist = song; actionSong = null },
                 onChangeCover = { onSearchCoverForSong(song); actionSong = null },
                 onEdit = { onEditSong(song); actionSong = null },
@@ -479,6 +506,7 @@ private fun SongRow(
 @Composable
 private fun SongActionDialog(
     song: Song,
+    onEditDetails: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onChangeCover: () -> Unit,
     onEdit: () -> Unit,
@@ -514,6 +542,12 @@ private fun SongActionDialog(
         },
         text = {
             Column {
+                DropdownMenuItem(
+                    text = { Text("Edit details") },
+                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                    onClick = onEditDetails
+                )
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Change cover art") },
                     leadingIcon = { Icon(Icons.Filled.Image, contentDescription = null) },
@@ -551,6 +585,49 @@ private fun SongActionDialog(
             }
         },
         confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/** Renames a song. Artist is optional; a blank title is refused since the list has nothing
+ *  left to show for the song. */
+@Composable
+private fun EditSongDetailsDialog(
+    song: Song,
+    onSave: (title: String, artist: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var title by remember { mutableStateOf(song.title) }
+    var artist by remember { mutableStateOf(song.artist) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit details") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    singleLine = true,
+                    label = { Text("Title") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = artist,
+                    onValueChange = { artist = it },
+                    singleLine = true,
+                    label = { Text("Artist") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(title, artist) },
+                enabled = title.isNotBlank(),
+            ) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

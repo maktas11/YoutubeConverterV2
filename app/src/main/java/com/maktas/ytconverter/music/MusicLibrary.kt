@@ -3,6 +3,7 @@ package com.maktas.ytconverter.music
 import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
+import com.maktas.ytconverter.data.SongEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -19,7 +20,11 @@ object MusicLibrary {
         return cleaned.ifEmpty { trimmed }
     }
 
-    suspend fun scan(context: Context, hiddenUris: Set<String> = emptySet()): List<Song> = withContext(Dispatchers.IO) {
+    suspend fun scan(
+        context: Context,
+        hiddenUris: Set<String> = emptySet(),
+        edits: Map<String, SongEdit> = emptyMap(),
+    ): List<Song> = withContext(Dispatchers.IO) {
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -44,17 +49,23 @@ object MusicLibrary {
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
-                // Filenames like "Song (1)", "Song (2)" leak into the title — strip that
-                // trailing copy-number so re-downloads collapse to one clean entry.
-                val title = cleanTitle(cursor.getString(titleCol) ?: "(unknown title)")
-                val artist = cursor.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: ""
-                val durationMs = cursor.getLong(durCol)
-
                 val uri = ContentUris.withAppendedId(collection, id).toString()
                 if (uri in hiddenUris) continue
 
+                val durationMs = cursor.getLong(durCol)
+                // A name the user typed is taken literally: no copy-number cleanup (so
+                // "Remix (2)" survives) and never dropped as a duplicate (so renaming a
+                // song can't make it vanish from the list).
+                val edit = edits[uri]
+                // Filenames like "Song (1)", "Song (2)" leak into the title — strip that
+                // trailing copy-number so re-downloads collapse to one clean entry.
+                val title = edit?.title ?: cleanTitle(cursor.getString(titleCol) ?: "(unknown title)")
+                val artist = edit?.artist
+                    ?: cursor.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                    ?: ""
+
                 val key = "${title.lowercase()}|${artist.lowercase()}|${durationMs / 1000}"
-                if (!seen.add(key)) continue
+                if (!seen.add(key) && edit == null) continue
 
                 songs += Song(
                     id = id,
@@ -63,6 +74,7 @@ object MusicLibrary {
                     durationMs = durationMs,
                     uri = uri,
                     dateAdded = cursor.getLong(dateCol),
+                    edited = edit != null,
                 )
             }
         }

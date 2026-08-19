@@ -2,16 +2,21 @@ package com.maktas.ytconverter.ui
 
 import android.app.Application
 import android.app.RecoverableSecurityException
+import android.content.ContentValues
 import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
+import android.provider.MediaStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.maktas.ytconverter.data.CoverArtRepository
 import com.maktas.ytconverter.data.SettingsRepository
+import com.maktas.ytconverter.data.SongEdit
 import com.maktas.ytconverter.data.SortMode
+import com.maktas.ytconverter.data.playlist.PlaylistRepository
 import com.maktas.ytconverter.download.DownloadController
 import com.maktas.ytconverter.download.DownloadUiState
 import com.maktas.ytconverter.music.MusicLibrary
@@ -35,7 +40,9 @@ sealed interface LibraryUiState {
 class MusicViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settings = SettingsRepository(app)
+    private val playlists = PlaylistRepository(app)
     private var hiddenUris: Set<String> = emptySet()
+    private var songEdits: Map<String, SongEdit> = emptyMap()
 
     var query by mutableStateOf("")
         private set
@@ -52,6 +59,13 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
     // the UI launches this via StartIntentSenderForResult and reports back the outcome.
     var pendingDeleteIntentSender: IntentSender? by mutableStateOf(null)
         private set
+
+    // Same consent flow as delete, for editing a song this app doesn't own. The edit is
+    // already applied in-app by the time this is set — approving only widens it to MediaStore.
+    var pendingWriteIntentSender: IntentSender? by mutableStateOf(null)
+        private set
+
+    private var pendingEdit: Triple<Song, String, String>? = null
 
     private val _errorEvents = Channel<String>(Channel.BUFFERED)
     val errorEvents: Flow<String> = _errorEvents.receiveAsFlow()
@@ -94,9 +108,67 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
         if (state !is LibraryUiState.Loaded) state = LibraryUiState.Loading
         viewModelScope.launch {
             hiddenUris = settings.hiddenSongs.first()
-            allSongs = MusicLibrary.scan(getApplication(), hiddenUris)
+            songEdits = settings.songEdits.first()
+            allSongs = MusicLibrary.scan(getApplication(), hiddenUris, songEdits)
             applyView()
         }
+    }
+
+    /**
+     * Renames a song. The local override is written first and is the source of truth, so
+     * the new name holds even if the MediaStore write below is declined or later undone by
+     * a media rescan. Custom cover art and playlist entries follow the new name.
+     */
+    fun editSong(song: Song, newTitle: String, newArtist: String) {
+        val title = newTitle.trim()
+        val artist = newArtist.trim()
+        if (title.isEmpty() || (title == song.title && artist == song.artist)) return
+        viewModelScope.launch {
+            settings.setSongEdit(song.uri, title, artist)
+            withContext(Dispatchers.IO) {
+                CoverArtRepository.rename(getApplication(), song.title, title)
+            }
+            playlists.updateSongDetails(song.uri, title, artist)
+            refresh()
+            writeToMediaStore(song, title, artist, allowConsent = true)
+        }
+    }
+
+    /** Pushes an edit out to MediaStore so other apps see it too. Succeeds silently for
+     *  files this app downloaded; anything else needs the user's consent first. */
+    private suspend fun writeToMediaStore(song: Song, title: String, artist: String, allowConsent: Boolean) {
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Media.TITLE, title)
+            put(MediaStore.Audio.Media.ARTIST, artist)
+        }
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                getApplication<Application>().contentResolver.update(Uri.parse(song.uri), values, null, null)
+            }
+        }
+        result.onFailure { e ->
+            val needsConsent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                e is RecoverableSecurityException
+            if (needsConsent && allowConsent) {
+                pendingEdit = Triple(song, title, artist)
+                pendingWriteIntentSender =
+                    (e as RecoverableSecurityException).userAction.actionIntent.intentSender
+            } else if (!needsConsent) {
+                _errorEvents.send("Renamed in Echo only — the system couldn't be updated.")
+            }
+        }
+    }
+
+    /** Called by the UI after the system write-consent dialog (from [pendingWriteIntentSender])
+     *  closes. Declining keeps the in-app rename; only the MediaStore write is skipped. */
+    fun onWritePermissionResult(approved: Boolean) {
+        pendingWriteIntentSender = null
+        val edit = pendingEdit ?: return
+        pendingEdit = null
+        if (!approved) return
+        // allowConsent = false: consent was just granted, so a second failure is real — never
+        // bounce the user back into the same dialog.
+        viewModelScope.launch { writeToMediaStore(edit.first, edit.second, edit.third, allowConsent = false) }
     }
 
     fun deleteSong(song: Song) {

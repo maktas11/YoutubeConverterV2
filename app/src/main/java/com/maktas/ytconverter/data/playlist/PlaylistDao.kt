@@ -40,6 +40,11 @@ interface PlaylistDao {
     @Query("DELETE FROM playlist_songs WHERE id = :songId")
     suspend fun deleteSong(songId: Long)
 
+    /** Playlist rows keep their own copy of the title/artist, so a rename has to reach
+     *  every playlist the song is in — otherwise it shows two names in two places. */
+    @Query("UPDATE playlist_songs SET title = :title, artist = :artist WHERE uri = :uri")
+    suspend fun updateSongDetails(uri: String, title: String, artist: String)
+
     @Update
     suspend fun updateSongs(songs: List<PlaylistSong>)
 }

@@ -26,6 +26,17 @@ object CoverArtRepository {
         _version.value = System.currentTimeMillis()
     }
 
+    /** Follows a saved cover to a renamed song — covers are keyed by title, so without
+     *  this a rename silently drops back to the default artwork. */
+    fun rename(context: Context, oldTitle: String, newTitle: String) {
+        if (key(oldTitle) == key(newTitle)) return
+        val old = File(dir(context), "${key(oldTitle)}.jpg")
+        if (!old.exists()) return
+        val new = File(dir(context), "${key(newTitle)}.jpg")
+        new.delete()
+        if (old.renameTo(new)) _version.value = System.currentTimeMillis()
+    }
+
     fun getFile(context: Context, title: String): File? {
         val f = File(dir(context), "${key(title)}.jpg")
         return if (f.exists()) f else null

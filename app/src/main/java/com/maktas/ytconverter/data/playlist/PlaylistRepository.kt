@@ -49,6 +49,10 @@ class PlaylistRepository(context: Context) {
 
     suspend fun removeSong(playlistSongId: Long) = dao.deleteSong(playlistSongId)
 
+    /** Applies a renamed song's title/artist to every playlist entry pointing at it. */
+    suspend fun updateSongDetails(uri: String, title: String, artist: String) =
+        dao.updateSongDetails(uri, title, artist)
+
     /** Persists a new order; positions are reassigned to match the list order. */
     suspend fun reorder(songs: List<PlaylistSong>) {
         dao.updateSongs(songs.mapIndexed { index, song -> song.copy(position = index) })

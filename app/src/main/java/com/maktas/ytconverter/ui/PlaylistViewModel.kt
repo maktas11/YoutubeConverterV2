@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.maktas.ytconverter.data.SettingsRepository
 import com.maktas.ytconverter.data.playlist.PlaylistRepository
 import com.maktas.ytconverter.data.playlist.PlaylistSong
 import com.maktas.ytconverter.data.playlist.PlaylistWithCount
@@ -14,12 +15,19 @@ import com.maktas.ytconverter.music.Song
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = PlaylistRepository(app)
+    private val settings = SettingsRepository(app)
+
+    /** Library scan with the user's renames applied, so a song shows the same name here
+     *  as it does in the library list. */
+    private suspend fun scanLibrary(): List<Song> =
+        MusicLibrary.scan(getApplication(), edits = settings.songEdits.first())
 
     val playlists: StateFlow<List<PlaylistWithCount>> = repo.playlists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -70,7 +78,7 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
             repo.songs(playlist.playlist.id).collect { openSongs = it }
         }
         viewModelScope.launch {
-            availableUris = MusicLibrary.scan(getApplication()).mapTo(HashSet()) { it.uri }
+            availableUris = scanLibrary().mapTo(HashSet()) { it.uri }
         }
     }
 
@@ -100,7 +108,7 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
         songPickerQuery = ""
         showSongPicker = true
         viewModelScope.launch {
-            songPickerAll = MusicLibrary.scan(getApplication())
+            songPickerAll = scanLibrary()
         }
     }
 
@@ -124,7 +132,7 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun addSongByDisplayName(playlistId: Long, displayName: String) {
         viewModelScope.launch {
-            val songs = MusicLibrary.scan(getApplication())
+            val songs = scanLibrary()
             val title = displayName.substringBeforeLast('.')
             val song = songs.firstOrNull { it.title.equals(title, ignoreCase = true) }
                 ?: songs.firstOrNull { it.title.lowercase().contains(title.lowercase()) }

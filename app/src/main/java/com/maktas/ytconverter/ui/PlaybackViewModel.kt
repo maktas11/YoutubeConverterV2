@@ -172,6 +172,36 @@ class PlaybackViewModel(app: Application) : AndroidViewModel(app) {
         c.play()
     }
 
+    /**
+     * Rewrites the title/artist of every queue item pointing at [uri] after a rename, so
+     * the now-playing UI, the media notification and the widget update immediately instead
+     * of showing the old name until the song is queued again.
+     */
+    fun updateSongMetadata(uri: String, title: String, artist: String) {
+        val c = controller ?: return
+        for (i in 0 until c.mediaItemCount) {
+            val item = c.getMediaItemAt(i)
+            // artworkUri is the same song URI and always survives the controller boundary,
+            // so it's a safe fallback when localConfiguration isn't populated.
+            val itemUri = item.localConfiguration?.uri?.toString()
+                ?: item.mediaMetadata.artworkUri?.toString()
+            if (itemUri != uri) continue
+            c.replaceMediaItem(
+                i,
+                item.buildUpon()
+                    .setMediaMetadata(
+                        item.mediaMetadata.buildUpon()
+                            .setTitle(title)
+                            .setArtist(artist.ifBlank { null })
+                            .build()
+                    )
+                    .build()
+            )
+        }
+        syncState()
+        viewModelScope.launch { saveState() }
+    }
+
     fun togglePlayPause() {
         val c = controller ?: return
         if (c.isPlaying) c.pause() else c.play()

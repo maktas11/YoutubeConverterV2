@@ -13,6 +13,7 @@ import com.maktas.ytconverter.download.UpdateChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.json.JSONObject
 
 /** Audio container/codec the downloader uses. M4A = stream copy (lossless/instant). */
 enum class AudioFormat { M4A, MP3 }
@@ -32,6 +33,15 @@ enum class ShuffleStyle { SMART, PURE_RANDOM }
 
 /** Music library sort order. */
 enum class SortMode { NEWEST, TITLE }
+
+/**
+ * A user-edited title/artist for one song, keyed by its content URI.
+ *
+ * Edits are also written to MediaStore so other apps see them, but this local copy is the
+ * source of truth: it survives a media rescan resetting MediaStore back to the file's own
+ * tags, and it still applies when the user declines the scoped-storage write consent.
+ */
+data class SongEdit(val title: String, val artist: String)
 
 /**
  * Where the app's color scheme comes from. DYNAMIC = match the phone wallpaper
@@ -97,6 +107,7 @@ class SettingsRepository(private val context: Context) {
         val SHUFFLE_STYLE = stringPreferencesKey("shuffle_style")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         val HIDDEN_SONGS = stringSetPreferencesKey("hidden_songs")
+        val SONG_EDITS = stringPreferencesKey("song_edits")
         val COLOR_THEME_MODE = stringPreferencesKey("color_theme_mode")
         val COLOR_PRESET_ID = stringPreferencesKey("color_preset_id")
         val CUSTOM_SEED = intPreferencesKey("custom_seed")
@@ -194,6 +205,32 @@ class SettingsRepository(private val context: Context) {
             val current = prefs[Keys.HIDDEN_SONGS] ?: emptySet()
             prefs[Keys.HIDDEN_SONGS] = if (hide) current + uri else current - uri
         }
+    }
+
+    /** User-renamed songs, keyed by content URI. Applied by MusicLibrary at scan time. */
+    val songEdits: Flow<Map<String, SongEdit>> =
+        context.dataStore.data.map { parseSongEdits(it[Keys.SONG_EDITS]) }
+
+    suspend fun setSongEdit(uri: String, title: String, artist: String) {
+        context.dataStore.edit { prefs ->
+            val updated = parseSongEdits(prefs[Keys.SONG_EDITS]) + (uri to SongEdit(title, artist))
+            prefs[Keys.SONG_EDITS] = JSONObject().apply {
+                updated.forEach { (songUri, edit) ->
+                    put(songUri, JSONObject().put("title", edit.title).put("artist", edit.artist))
+                }
+            }.toString()
+        }
+    }
+
+    private fun parseSongEdits(json: String?): Map<String, SongEdit> {
+        if (json.isNullOrEmpty()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            obj.keys().asSequence().associateWith { uri ->
+                val edit = obj.getJSONObject(uri)
+                SongEdit(edit.optString("title"), edit.optString("artist"))
+            }
+        }.getOrElse { emptyMap() }
     }
 
     suspend fun savePlaybackState(state: SavedPlaybackState) {

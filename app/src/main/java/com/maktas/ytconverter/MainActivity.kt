@@ -387,13 +387,17 @@ private fun MainScaffold(
                     )
                 }
             }
-            // Shared across every tab, not just the Converter screen.
-            TextButton(
-                onClick = onOpenSettings,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(innerPadding),
-            ) { Text("Settings") }
+            // Shared across every tab, not just the Converter screen. Hidden while a playlist
+            // is open — those screens put their own "Add songs" button in this same top-right
+            // corner, and the floating Settings button would sit on top of it, blocking taps.
+            if (playlistVm.openId == null) {
+                TextButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(innerPadding),
+                ) { Text("Settings") }
+            }
         }
     }
 }
